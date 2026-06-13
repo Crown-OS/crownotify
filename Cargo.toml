@@ -1,0 +1,13 @@
+[package]
+name = "crownotify"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rama Krishnan <ramakrishnan@gmail.com>"]
+
+
+[dependencies]
+iced = "0.14.0"
+iced_layershell = "0.18.1"
+serde = "1.0.228"
+smol = "2.0.2"
+zbus = "5.16.0"
