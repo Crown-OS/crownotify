@@ -53,11 +53,22 @@ impl CustomNotificationInterface {
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }
 
-    fn send_call_notification(&self, contact_name: String) -> Result<()> {
+    fn send_call_notification(
+        &self,
+        call_id: String,
+        app_name: String,
+        contact_avatar: String,
+        contact_name: String,
+        phone_number: String,
+    ) -> Result<()> {
         self.sender
             .unbounded_send(Notification::Call(CallNotification {
+                call_id,
                 app_icon: Icon::Local(LocalIcon {}),
+                app_name,
+                contact_avatar,
                 contact_name,
+                phone_number,
             }))
             .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
     }

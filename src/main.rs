@@ -1,17 +1,13 @@
-mod dbus;
-mod models;
-mod ui;
-
 use std::error::Error;
 use std::future::pending;
 
 use iced::futures::channel::mpsc;
 use zbus::connection;
 
-use crate::dbus::custom::CustomNotificationInterface;
-use crate::dbus::freedesktop::SystemNotificationInterface;
-use crate::models::Notification;
-use crate::ui::app::create_window;
+use crownotify::dbus::custom::CustomNotificationInterface;
+use crownotify::dbus::freedesktop::SystemNotificationInterface;
+use crownotify::models::Notification;
+use crownotify::ui::app::create_window;
 
 fn main() -> Result<(), Box<dyn Error>> {
     smol::block_on(async {

@@ -13,9 +13,7 @@ use crate::ui::view::view;
 
 static NOTIFICATION_RX: OnceLock<Mutex<Option<UnboundedReceiver<Notification>>>> = OnceLock::new();
 
-pub fn create_window(
-    rx: UnboundedReceiver<Notification>,
-) -> Result<(), iced_layershell::Error> {
+pub fn create_window(rx: UnboundedReceiver<Notification>) -> Result<(), iced_layershell::Error> {
     NOTIFICATION_RX
         .set(Mutex::new(Some(rx)))
         .map_err(|_| ())
@@ -38,6 +36,8 @@ pub fn create_window(
                 start_mode,
                 ..Default::default()
             },
+
+            antialiasing: true,
             ..Default::default()
         })
         .run()

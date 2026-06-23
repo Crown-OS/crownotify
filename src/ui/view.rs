@@ -2,6 +2,7 @@ use iced::widget::{button, column, container, row, text};
 use iced::{Element, Length};
 
 use crate::models::Notification;
+use crate::ui::components::call::call_notification_card;
 use crate::ui::state::{Message, NotificationUIState};
 
 pub fn view(state: &NotificationUIState) -> Element<'_, Message> {
@@ -32,12 +33,7 @@ fn notification_card(notification: &Notification) -> Element<'_, Message> {
         ]
         .spacing(2)
         .into(),
-        Notification::Call(n) => column![
-            text("Incoming call").size(14),
-            text(&n.contact_name).size(16),
-        ]
-        .spacing(2)
-        .into(),
+        Notification::Call(notification) => call_notification_card(notification).into(),
         Notification::Music(n) => column![
             text("Now playing").size(14),
             text(&n.song_name).size(16),
