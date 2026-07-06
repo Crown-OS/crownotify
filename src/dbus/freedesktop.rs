@@ -1,28 +1,37 @@
-/*
-* Dbus interface to receive notifications though dbus based on freedesktop.org specifications
-* (https://specifications.freedesktop.org/notification/latest/protocol.html)
-*/
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{atomic::Ordering, Arc, Mutex},
+};
 
-use std::{collections::HashMap, sync::atomic::Ordering};
-
-use iced::futures::channel::mpsc::UnboundedSender;
+use calloop::ping::Ping;
 use zbus::{fdo::Result, interface, object_server::SignalEmitter, zvariant::Value};
 
 use crate::models::{general::GeneralNotification, Notification};
-use crate::ui::components::icon::{Icon, LocalIcon};
 
 const NOTIFICATION_SPEC_VERSION: &str = "1.2";
+
+pub type Inbox = Arc<Mutex<VecDeque<Notification>>>;
+
 pub struct SystemNotificationInterface {
-    sender: UnboundedSender<Notification>,
+    inbox: Inbox,
+    waker: Ping,
     current_id: std::sync::atomic::AtomicU32,
 }
 
 impl SystemNotificationInterface {
-    pub fn new(sender: UnboundedSender<Notification>) -> Self {
+    pub fn new(inbox: Inbox, waker: Ping) -> Self {
         Self {
-            sender,
+            inbox,
+            waker,
             current_id: Default::default(),
         }
+    }
+
+    fn push(&self, notif: Notification) {
+        if let Ok(mut inbox) = self.inbox.lock() {
+            inbox.push_back(notif);
+        }
+        self.waker.ping();
     }
 }
 
@@ -54,11 +63,11 @@ impl SystemNotificationInterface {
         &self,
         app_name: String,
         replaces_id: u32,
-        app_icon: String,
+        _app_icon: String,
         summary: String,
         body: String,
         actions: Vec<String>,
-        hints: HashMap<String, Value<'_>>,
+        _hints: HashMap<String, Value<'_>>,
         expire_timeout: i32,
     ) -> Result<u32> {
         let id = if replaces_id != 0 {
@@ -67,22 +76,19 @@ impl SystemNotificationInterface {
             self.current_id.fetch_add(1, Ordering::SeqCst) + 1
         };
 
-        self.sender
-            .unbounded_send(Notification::General(GeneralNotification {
-                app_icon: Icon::Local(LocalIcon {}),
-                app_name,
-                summary,
-                body,
-                expire_timeout: expire_timeout.max(0) as u32,
-                action: actions,
-            }))
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        self.push(Notification::General(GeneralNotification {
+            app_icon: None,
+            app_name,
+            summary,
+            body,
+            expire_timeout: expire_timeout.max(0) as u32,
+            action: actions,
+        }));
 
         Ok(id)
     }
 
-    fn close_notification(&self, id: u32) -> Result<()> {
-        println!("close");
+    fn close_notification(&self, _id: u32) -> Result<()> {
         Ok(())
     }
 

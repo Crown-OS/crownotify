@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use zbus::{connection, interface, proxy, Connection};
@@ -6,6 +6,18 @@ use zbus::{connection, interface, proxy, Connection};
 use crownotify::models::call::{
     CallNotification, CROWNCRATE_INTERFACE, CROWNCRATE_PATH, CROWNCRATE_SERVICE,
 };
+
+// Tests share well-known D-Bus names on the session bus, so they must not
+// run concurrently — otherwise the second registration silently queues and
+// the wrong mock receives the call.
+fn bus_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let m = LOCK.get_or_init(|| Mutex::new(()));
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 #[derive(Default, Clone)]
 struct CrowncrateCaptured {
@@ -107,8 +119,10 @@ async fn start_mock_crownotify(captured: Arc<Mutex<CallNotificationCaptured>>) -
 
 #[test]
 fn test_send_call_notification_delivers_all_fields() {
+    let _guard = bus_test_lock();
     smol::block_on(async {
-        let captured: Arc<Mutex<CallNotificationCaptured>> = Arc::new(Mutex::new(Default::default()));
+        let captured: Arc<Mutex<CallNotificationCaptured>> =
+            Arc::new(Mutex::new(Default::default()));
         let _service_conn = start_mock_crownotify(captured.clone()).await;
 
         let conn = Connection::session()
@@ -141,6 +155,7 @@ fn test_send_call_notification_delivers_all_fields() {
 
 #[test]
 fn test_pickup_notifies_crowncrate() {
+    let _guard = bus_test_lock();
     smol::block_on(async {
         let captured: Arc<Mutex<CrowncrateCaptured>> = Arc::new(Mutex::new(Default::default()));
         let _service_conn = start_mock_crowncrate(captured.clone()).await;
@@ -157,6 +172,7 @@ fn test_pickup_notifies_crowncrate() {
 
 #[test]
 fn test_decline_notifies_crowncrate() {
+    let _guard = bus_test_lock();
     smol::block_on(async {
         let captured: Arc<Mutex<CrowncrateCaptured>> = Arc::new(Mutex::new(Default::default()));
         let _service_conn = start_mock_crowncrate(captured.clone()).await;
@@ -173,7 +189,6 @@ fn test_decline_notifies_crowncrate() {
 
 #[test]
 fn test_pickup_and_decline_use_correct_dbus_endpoint() {
-    // Sanity: the constants the model uses match what the test mock advertises.
     assert_eq!(CROWNCRATE_SERVICE, "io.crownos.crowncrate");
     assert_eq!(CROWNCRATE_PATH, "/io/crownos/crowncrate");
     assert_eq!(CROWNCRATE_INTERFACE, "io.crownos.crowncrate");
@@ -182,4 +197,35 @@ fn test_pickup_and_decline_use_correct_dbus_endpoint() {
 #[allow(dead_code)]
 async fn settle() {
     smol::Timer::after(Duration::from_millis(50)).await;
+}
+
+// Real-service integration test. Skipped by default — start crowncrate first
+// and run with: `cargo test -- --ignored real_crowncrate`.
+#[test]
+#[ignore]
+fn test_real_crowncrate_is_running() {
+    smol::block_on(async {
+        let conn = Connection::session()
+            .await
+            .expect("session bus connection failed");
+
+        let has_owner: bool = conn
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "NameHasOwner",
+                &(CROWNCRATE_SERVICE,),
+            )
+            .await
+            .expect("NameHasOwner call failed")
+            .body()
+            .deserialize()
+            .expect("NameHasOwner reply deserialize failed");
+
+        assert!(
+            has_owner,
+            "crowncrate is not running: no owner for {CROWNCRATE_SERVICE} on the session bus"
+        );
+    });
 }

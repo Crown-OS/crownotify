@@ -1,8 +1,8 @@
-use crate::ui::components::icon::Icon;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct ChatNotification {
-    pub icon: Icon,
+    pub icon: Option<PathBuf>,
     pub title: String,
     pub app_name: String,
     pub body: String,

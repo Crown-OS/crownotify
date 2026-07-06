@@ -1,8 +1,8 @@
-use crate::ui::components::icon::Icon;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct GeneralNotification {
-    pub app_icon: Icon,
+    pub app_icon: Option<PathBuf>,
     pub app_name: String,
     pub summary: String,
     pub body: String,

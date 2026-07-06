@@ -1,4 +1,4 @@
-use crate::ui::components::icon::Icon;
+use std::path::PathBuf;
 
 pub const CROWNCRATE_SERVICE: &str = "io.crownos.crowncrate";
 pub const CROWNCRATE_PATH: &str = "/io/crownos/crowncrate";
@@ -7,7 +7,7 @@ pub const CROWNCRATE_INTERFACE: &str = "io.crownos.crowncrate";
 #[derive(Debug, Clone)]
 pub struct CallNotification {
     pub call_id: String,
-    pub app_icon: Icon,
+    pub app_icon: Option<PathBuf>,
     pub app_name: String,
     pub contact_avatar: String,
     pub contact_name: String,

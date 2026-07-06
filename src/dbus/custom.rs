@@ -1,35 +1,41 @@
-/*
-* Dbus interface to receive notifications from peer CrownOS Apps
-*/
-
-use iced::futures::channel::mpsc::UnboundedSender;
+use calloop::ping::Ping;
 use zbus::{fdo::Result, interface};
 
-use crate::models::{
-    call::CallNotification, chat::ChatNotification, general::GeneralNotification,
-    music::MusicNotification, Notification,
+use crate::{
+    dbus::freedesktop::Inbox,
+    models::{
+        call::CallNotification, chat::ChatNotification, general::GeneralNotification,
+        music::MusicNotification, Notification,
+    },
 };
-use crate::ui::components::icon::{Icon, LocalIcon};
 
 pub struct CustomNotificationInterface {
-    pub sender: UnboundedSender<Notification>,
+    inbox: Inbox,
+    waker: Ping,
 }
 
 impl CustomNotificationInterface {
-    pub fn new(sender: UnboundedSender<Notification>) -> Self {
-        Self { sender }
+    pub fn new(inbox: Inbox, waker: Ping) -> Self {
+        Self { inbox, waker }
+    }
+
+    fn push(&self, notif: Notification) {
+        if let Ok(mut inbox) = self.inbox.lock() {
+            inbox.push_back(notif);
+        }
+        self.waker.ping();
     }
 }
 
 #[interface(name = "io.crownos.crownotify")]
 impl CustomNotificationInterface {
     fn open_notification_center(&self) -> Result<()> {
-        println!("Notification center open");
+        log::info!("notification center open");
         Ok(())
     }
 
     fn close_notification_center(&self) -> Result<()> {
-        println!("Notification center closed");
+        log::info!("notification center closed");
         Ok(())
     }
 
@@ -41,16 +47,15 @@ impl CustomNotificationInterface {
         expire_timeout: u32,
         actions: Vec<String>,
     ) -> Result<()> {
-        self.sender
-            .unbounded_send(Notification::General(GeneralNotification {
-                app_icon: Icon::Local(LocalIcon {}),
-                app_name,
-                summary,
-                body,
-                expire_timeout,
-                action: actions,
-            }))
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.push(Notification::General(GeneralNotification {
+            app_icon: None,
+            app_name,
+            summary,
+            body,
+            expire_timeout,
+            action: actions,
+        }));
+        Ok(())
     }
 
     fn send_call_notification(
@@ -61,26 +66,24 @@ impl CustomNotificationInterface {
         contact_name: String,
         phone_number: String,
     ) -> Result<()> {
-        self.sender
-            .unbounded_send(Notification::Call(CallNotification {
-                call_id,
-                app_icon: Icon::Local(LocalIcon {}),
-                app_name,
-                contact_avatar,
-                contact_name,
-                phone_number,
-            }))
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.push(Notification::Call(CallNotification {
+            call_id,
+            app_icon: None,
+            app_name,
+            contact_avatar,
+            contact_name,
+            phone_number,
+        }));
+        Ok(())
     }
 
     fn send_music_notification(&self, song_name: String, percentage: u8) -> Result<()> {
-        self.sender
-            .unbounded_send(Notification::Music(MusicNotification {
-                app_icon: Icon::Local(LocalIcon {}),
-                song_name,
-                percentage,
-            }))
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.push(Notification::Music(MusicNotification {
+            app_icon: None,
+            song_name,
+            percentage,
+        }));
+        Ok(())
     }
 
     fn send_chat_notification(
@@ -90,14 +93,13 @@ impl CustomNotificationInterface {
         body: String,
         timestamp: String,
     ) -> Result<()> {
-        self.sender
-            .unbounded_send(Notification::Chat(ChatNotification {
-                icon: Icon::Local(LocalIcon {}),
-                title,
-                app_name,
-                body,
-                timestamp,
-            }))
-            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+        self.push(Notification::Chat(ChatNotification {
+            icon: None,
+            title,
+            app_name,
+            body,
+            timestamp,
+        }));
+        Ok(())
     }
 }
