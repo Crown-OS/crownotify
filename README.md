@@ -1,3 +1,20 @@
+> [!IMPORTANT]
+> **This repository is archived. The code moved to [Crown-OS/crownOs](https://github.com/Crown-OS/crownOs).**
+>
+> It is now `crates/crownotify` in the CrownOS workspace, with its history intact. The
+> crate name on crates.io is unchanged -- `cargo add crownotify` is unaffected by
+> where the source lives.
+>
+> The nine desktop crates were merged because a change crossing two of them
+> used to be two pull requests in two repositories that nothing built together.
+> A schema change once broke the compositor for eight days before anyone
+> noticed. One workspace, one lockfile, one CI run.
+>
+> Issues and pull requests: https://github.com/Crown-OS/crownOs
+>
+> This repository stays read-only so existing links keep resolving. Everything
+> below describes the state at the time of the merge.
+
 # crownotify
 
 The notification daemon for [CrownOS](https://github.com/Crown-OS). Implements
