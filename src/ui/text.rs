@@ -3,8 +3,8 @@ use parley::{
     PositionedLayoutItem, StyleProperty,
 };
 use vello::{
-    peniko::{Brush, Color, Fill},
     Glyph, Scene,
+    peniko::{Brush, Color, Fill},
 };
 
 const DISPLAY_SCALE: f32 = 1.0;

@@ -4,8 +4,8 @@ use std::{
     thread,
 };
 
-use anyhow::{anyhow, Result};
-use calloop::ping::{make_ping, Ping};
+use anyhow::{Result, anyhow};
+use calloop::ping::{Ping, make_ping};
 use crownshell::{Anchor, App, KeyboardInteractivity, Layer, WindowConfig};
 
 use crownotify::{
@@ -50,10 +50,11 @@ fn main() -> Result<()> {
                     compositor_state,
                     qh,
                     windows,
+                    text_cx,
                     ..
                 } = app;
                 for window in windows.iter_mut() {
-                    window.request_frame(compositor_state, qh);
+                    window.request_frame(compositor_state, qh, text_cx);
                 }
             })
             .map_err(|e| anyhow!("insert ping source: {}", e.error))?;

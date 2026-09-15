@@ -1,8 +1,8 @@
 use parley::{FontContext, LayoutContext};
 use vello::{
+    Scene,
     kurbo::{Affine, Circle, Point, RoundedRect, Stroke},
     peniko::{Brush, Color, Fill},
-    Scene,
 };
 
 use crate::models::Notification;
@@ -160,7 +160,6 @@ impl Painter {
                 let h = meta.height() + 4.0 + title.height() + 2.0 + body.height();
                 h + 2.0 * CARD_PAD_Y
             }
-            Notification::Audio(_) | Notification::Display(_) => 48.0 + 2.0 * CARD_PAD_Y,
         }
     }
 
@@ -228,9 +227,17 @@ impl Painter {
                 let avatar_r = 28.0f32;
                 let avatar_cx = inner_x + avatar_r;
                 let avatar_cy = inner_y + avatar_r;
-                let circle =
-                    Circle::new(Point::new(avatar_cx as f64, avatar_cy as f64), avatar_r as f64);
-                scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, AVATAR_STROKE, None, &circle);
+                let circle = Circle::new(
+                    Point::new(avatar_cx as f64, avatar_cy as f64),
+                    avatar_r as f64,
+                );
+                scene.stroke(
+                    &Stroke::new(2.0),
+                    Affine::IDENTITY,
+                    AVATAR_STROKE,
+                    None,
+                    &circle,
+                );
 
                 let text_x = avatar_cx + avatar_r + 14.0;
                 let text_w = inner_w - (text_x - inner_x);
@@ -285,7 +292,14 @@ impl Painter {
                 );
                 draw_layout(scene, &song, inner_x, song_y, FG);
                 let bar_y = song_y + song.height() + 8.0;
-                self.draw_progress(scene, inner_x, bar_y, inner_w, 4.0, m.percentage as f32 / 100.0);
+                self.draw_progress(
+                    scene,
+                    inner_x,
+                    bar_y,
+                    inner_w,
+                    4.0,
+                    m.percentage as f32 / 100.0,
+                );
                 hits.push(HitRegion {
                     rect: (x, y, w, h),
                     action: HitAction::Dismiss(idx),
@@ -323,20 +337,6 @@ impl Painter {
                     action: HitAction::Dismiss(idx),
                 });
             }
-            Notification::Audio(_) | Notification::Display(_) => {
-                let label = build_layout(
-                    &mut self.font_ctx,
-                    &mut self.layout_ctx,
-                    "Notification",
-                    14.0,
-                    Some(inner_w),
-                );
-                draw_layout(scene, &label, inner_x, inner_y, FG);
-                hits.push(HitRegion {
-                    rect: (x, y, w, h),
-                    action: HitAction::Dismiss(idx),
-                });
-            }
         }
     }
 
@@ -348,7 +348,13 @@ impl Painter {
     }
 
     fn draw_progress(&self, scene: &mut Scene, x: f32, y: f32, w: f32, h: f32, pct: f32) {
-        let bg = RoundedRect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64, (h * 0.5) as f64);
+        let bg = RoundedRect::new(
+            x as f64,
+            y as f64,
+            (x + w) as f64,
+            (y + h) as f64,
+            (h * 0.5) as f64,
+        );
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,

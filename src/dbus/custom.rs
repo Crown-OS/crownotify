@@ -4,8 +4,8 @@ use zbus::{fdo::Result, interface};
 use crate::{
     dbus::freedesktop::Inbox,
     models::{
-        call::CallNotification, chat::ChatNotification, general::GeneralNotification,
-        music::MusicNotification, Notification,
+        Notification, call::CallNotification, chat::ChatNotification, general::GeneralNotification,
+        music::MusicNotification,
     },
 };
 

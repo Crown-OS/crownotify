@@ -1,10 +1,10 @@
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use zbus::{connection, interface, proxy, Connection};
+use zbus::{Connection, connection, interface, proxy};
 
 use crownotify::models::call::{
-    CallNotification, CROWNCRATE_INTERFACE, CROWNCRATE_PATH, CROWNCRATE_SERVICE,
+    CROWNCRATE_INTERFACE, CROWNCRATE_PATH, CROWNCRATE_SERVICE, CallNotification,
 };
 
 // Tests share well-known D-Bus names on the session bus, so they must not

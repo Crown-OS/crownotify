@@ -1,4 +1,4 @@
-use zbus::{connection, interface, proxy, Connection};
+use zbus::{Connection, connection, interface, proxy};
 
 struct TestInterface;
 
@@ -39,9 +39,16 @@ async fn start_service() -> zbus::Connection {
 fn test_open_notification_center() {
     smol::block_on(async {
         let _service_conn = start_service().await;
-        let conn = Connection::session().await.expect("session bus connection failed");
-        let proxy = CustomNotifyProxy::new(&conn).await.expect("proxy creation failed");
-        proxy.open_notification_center().await.expect("open_notification_center call failed");
+        let conn = Connection::session()
+            .await
+            .expect("session bus connection failed");
+        let proxy = CustomNotifyProxy::new(&conn)
+            .await
+            .expect("proxy creation failed");
+        proxy
+            .open_notification_center()
+            .await
+            .expect("open_notification_center call failed");
     });
 }
 
@@ -49,8 +56,15 @@ fn test_open_notification_center() {
 fn test_close_notification_center() {
     smol::block_on(async {
         let _service_conn = start_service().await;
-        let conn = Connection::session().await.expect("session bus connection failed");
-        let proxy = CustomNotifyProxy::new(&conn).await.expect("proxy creation failed");
-        proxy.close_notification_center().await.expect("close_notification_center call failed");
+        let conn = Connection::session()
+            .await
+            .expect("session bus connection failed");
+        let proxy = CustomNotifyProxy::new(&conn)
+            .await
+            .expect("proxy creation failed");
+        proxy
+            .close_notification_center()
+            .await
+            .expect("close_notification_center call failed");
     });
 }

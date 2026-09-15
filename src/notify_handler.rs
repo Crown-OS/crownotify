@@ -7,7 +7,7 @@ use std::{
 use crownshell::{Scene, SurfaceCtx, SurfaceHandler};
 
 use crate::{
-    models::{call::CallNotification, Notification},
+    models::{Notification, call::CallNotification},
     ui::painter::{HitAction, HitRegion, Painter},
 };
 
@@ -124,9 +124,9 @@ impl SurfaceHandler for NotifyHandler {
                     }
                 })
                 .detach();
-                if let Some(pos) = self.notifications.iter().position(|item| {
-                    matches!(&item.notif, Notification::Call(c) if c.call_id == id)
-                }) {
+                if let Some(pos) = self.notifications.iter().position(
+                    |item| matches!(&item.notif, Notification::Call(c) if c.call_id == id),
+                ) {
                     self.notifications.remove(pos);
                 }
                 true

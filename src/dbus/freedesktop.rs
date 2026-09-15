@@ -1,12 +1,12 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
 };
 
 use calloop::ping::Ping;
 use zbus::{fdo::Result, interface, object_server::SignalEmitter, zvariant::Value};
 
-use crate::models::{general::GeneralNotification, Notification};
+use crate::models::{Notification, general::GeneralNotification};
 
 const NOTIFICATION_SPEC_VERSION: &str = "1.2";
 
