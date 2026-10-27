@@ -4,24 +4,84 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Rama Krishnan <ramakrishnan@gmail.com>"]
 
+# The protocol schema alone, by default-features = false. Clients — the bar's
+# notification pill, a keybinding helper — get the typed contract without the
+# daemon's rendering, decoding and D-Bus stack. See the `daemon` feature.
+[lib]
+name = "crownotify"
+path = "src/lib.rs"
+
+[[bin]]
+name = "crownotify"
+path = "src/main.rs"
+required-features = ["daemon"]
+
+[features]
+default = ["daemon"]
+# Everything but the wire contract: the store, both surfaces, both transports.
+daemon = [
+  "crownos-ipc/calloop",
+  "dep:crownconnect-linux",
+  "dep:crownshell",
+  "dep:anyhow",
+  "dep:thiserror",
+  "dep:log",
+  "dep:env_logger",
+  "dep:vello",
+  "dep:parley",
+  "dep:calloop",
+  "dep:chrono",
+  "dep:toml",
+  "dep:smol",
+  "dep:async-channel",
+  "dep:zbus",
+  "dep:image",
+  "dep:usvg",
+  "dep:resvg",
+  "dep:tiny-skia",
+]
 
 [dependencies]
-crownshell = { path = "../crownshell" }
-
-anyhow = "1.0.102"
-log = "0.4"
-env_logger = "0.11"
-
-vello = "0.9.0"
-parley = "0.6"
-calloop = "0.13"
-
-chrono = "0.4.45"
+crownos-ipc = { path = "../crownos-ipc" }
+# The phone companion's schema only; the cards call it, nothing else does.
+crownconnect-linux = { path = "../crownconnect-linux", default-features = false, optional = true }
+# `protocol!` generates serde structs for every method and event, so the
+# schema half needs this even with `daemon` off.
 serde = { version = "1.0", features = ["derive"] }
-smol = "2.0.2"
-zbus = "5.16.0"
+
+crownshell = { path = "../crownshell", features = ["text"], optional = true }
+anyhow = { version = "1.0.102", optional = true }
+thiserror = { version = "2", optional = true }
+log = { version = "0.4", optional = true }
+env_logger = { version = "0.11", optional = true }
+
+vello = { version = "0.9.0", optional = true }
+parley = { version = "0.6", optional = true }
+calloop = { version = "0.13", optional = true }
+
+chrono = { version = "0.4.45", optional = true }
+toml = { version = "0.9", optional = true }
+smol = { version = "2.0.2", optional = true }
+async-channel = { version = "2", optional = true }
+zbus = { version = "5.16.0", optional = true }
+
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "webp",
+  "bmp",
+], optional = true }
+usvg = { version = "0.43", optional = true }
+resvg = { version = "0.43", optional = true }
+tiny-skia = { version = "0.11", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[patch.crates-io]
+vello_encoding = { path = "../vendor/vello_encoding-0.9.0" }
