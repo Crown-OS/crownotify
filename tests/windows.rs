@@ -11,7 +11,7 @@ use crownotify::{
     profile::table::Profiles,
     ui::{CardAction, Theme, Window, center, popup},
 };
-use crowntest::{Query, Role, TestApp, role};
+use crownui::crowntest::{Query, Role, TestApp, role};
 use crownui::prelude::{KeyboardInteractivity, Rect};
 use tokio::sync::watch;
 

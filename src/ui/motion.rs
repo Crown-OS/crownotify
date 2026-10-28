@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use crownui::motion;
+
 use crate::util::spring::Spring;
 
 /// Reveal-space velocity a dismissal starts with, in card widths per second.

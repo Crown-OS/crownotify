@@ -9,6 +9,7 @@
 
 use crownui::{
     ext::{Key, Kind, NamedKey},
+    motion,
     prelude::{
         Anchor, AppConfig, Cx, Element, KeyboardInteractivity, Layer, LayerOptions, Listeners,
         Signal, Size, Store, Styled, TRANSPARENT, View, bind, component, for_each, hstack, text,

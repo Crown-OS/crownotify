@@ -23,7 +23,6 @@ daemon = [
   "crownos-ipc/calloop",
   "dep:crownconnect-linux",
   "dep:crownui",
-  "dep:motion",
   "dep:tokio",
   "dep:anyhow",
   "dep:thiserror",
@@ -42,17 +41,14 @@ daemon = [
 ]
 
 [dependencies]
-crownos-ipc = { path = "../crownos-ipc" }
+crownos-ipc = { git = "https://github.com/crown-os/crownos-ipc" }
 # The phone companion's schema only; the cards call it, nothing else does.
-crownconnect-linux = { path = "../crownconnect-linux", default-features = false, optional = true }
+crownconnect-linux = { git = "https://github.com/crown-os/crownconnect-linux", default-features = false, optional = true }
 # `protocol!` generates serde structs for every method and event, so the
 # schema half needs this even with `daemon` off.
 serde = { version = "1.0", features = ["derive"] }
 
-crownui = { path = "../crownui/crownui", default-features = false, features = ["wayland", "impeller", "static", "tokio"], optional = true }
-# The analytic springs the cards are moved with on the UI thread, so the
-# compositor's blur and the input region follow them frame by frame.
-motion = { path = "../crownui/motion", optional = true }
+crownui = { version = "0.1.1", default-features = false, features = ["wayland", "impeller", "static", "tokio"], optional = true }
 # The windows follow the daemon's snapshots through a `watch`, awaited by
 # `cx.spawn` on crownui's own tokio executor.
 tokio = { version = "1", default-features = false, features = ["sync", "time"], optional = true }
@@ -81,16 +77,8 @@ tiny-skia = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-crowntest = { path = "../crownui/crowntest" }
-# The offscreen renderer behind `cargo run --example render`.
-impeller = { path = "../crownui/impeller", features = ["static"] }
-runtime = { path = "../crownui/runtime" }
-taffy-layout = { path = "../crownui/taffy-layout" }
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-
-[patch."https://github.com/crown-os/crownos-ipc"]
-crownos-ipc = { path = "../crownos-ipc" }

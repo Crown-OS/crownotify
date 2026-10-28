@@ -17,7 +17,10 @@
 
 use std::{collections::HashMap, mem, ops::Range, time::Duration};
 
-use crownui::prelude::{Cx, Rect, Runtime, Signal, Size, Store};
+use crownui::{
+    motion,
+    prelude::{Cx, Rect, Runtime, Signal, Size, Store},
+};
 
 use crate::{
     model::{Notification, NotificationId},
