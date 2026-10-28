@@ -6,13 +6,13 @@
 //! at full width. Everything between the two is a lerp of a single spring, so
 //! the unfurl is continuous and can be reversed mid-flight.
 //!
-//! Every function here is pure arithmetic over `(heights, unfurl, theme)`,
+//! Every function here is pure arithmetic over `(heights, unfurl, metrics)`,
 //! which is what lets the whole geometry be asserted without a GPU or a
 //! compositor — the property `tests/layout.rs` exists to protect.
 
-use crownshell::{Spring, SpringProfile};
+use std::time::Duration;
 
-use crate::ui::theme::Theme;
+use crate::{ui::theme::Metrics, util::spring::Spring};
 
 /// How many cards peek out from behind the top of a collapsed deck.
 ///
@@ -71,22 +71,22 @@ pub fn deepest(len: usize, unfurl: f32) -> usize {
     }
 }
 
-fn lerp(from: f64, to: f64, t: f32) -> f64 {
-    from + (to - from) * f64::from(t)
+fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
 }
 
 /// Where one card of a deck sits, relative to the top of the deck's cards.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pose {
-    pub top: f64,
-    pub height: f64,
+    pub top: f32,
+    pub height: f32,
     /// Horizontal inset per side, which is what makes a sliver narrower than
     /// the card in front of it.
     ///
     /// An inset rather than an `Affine` scale: scaling would shrink the corner
     /// radius and the shadow with it, and break the rectangle arithmetic the
     /// input and material regions are built from.
-    pub inset: f64,
+    pub inset: f32,
     pub alpha: f32,
 }
 
@@ -95,13 +95,12 @@ pub struct Pose {
 /// Stated once because the overflow scan and the placement pass must agree on
 /// it exactly; a deck measured one way and placed another loses a card off the
 /// bottom of the strip with nothing on screen to explain it.
-pub fn pose(heights: &[f64], depth: usize, unfurl: f32, theme: &Theme) -> Pose {
-    let metrics = &theme.metrics;
+pub fn pose(heights: &[f32], depth: usize, unfurl: f32, metrics: &Metrics) -> Pose {
     let peek = depth.min(MAX_PEEK);
     let opened = shape(unfurl);
 
-    let collapsed_top = metrics.deck_peek * peek as f64;
-    let expanded_top: f64 = heights[..depth.min(heights.len())]
+    let collapsed_top = metrics.deck_peek * peek as f32;
+    let expanded_top: f32 = heights[..depth.min(heights.len())]
         .iter()
         .map(|height| height + metrics.card_gap)
         .sum();
@@ -114,7 +113,7 @@ pub fn pose(heights: &[f64], depth: usize, unfurl: f32, theme: &Theme) -> Pose {
         // A sliver mirrors the top card's height rather than its own, so a deck
         // of mismatched cards still reads as one stack of plates.
         height: lerp(front, own, opened),
-        inset: metrics.deck_inset * peek as f64 * f64::from(1.0 - opened),
+        inset: metrics.deck_inset * peek as f32 * (1.0 - opened),
         alpha: peek_alpha(depth) + (1.0 - peek_alpha(depth)) * unfurl,
     }
 }
@@ -123,20 +122,20 @@ pub fn pose(heights: &[f64], depth: usize, unfurl: f32, theme: &Theme) -> Pose {
 ///
 /// Zero for a deck of one, and zero while collapsed, so grouping costs the
 /// toast strip nothing until the user asks for it.
-pub fn header_height(len: usize, unfurl: f32, theme: &Theme) -> f64 {
+pub fn header_height(len: usize, unfurl: f32, metrics: &Metrics) -> f32 {
     if len < 2 {
         return 0.0;
     }
-    lerp(0.0, theme.metrics.button + theme.metrics.card_gap, unfurl)
+    lerp(0.0, metrics.button + metrics.card_gap, unfurl)
 }
 
 /// How much room a deck occupies, its Clear All strip included.
-pub fn height(heights: &[f64], unfurl: f32, theme: &Theme) -> f64 {
+pub fn height(heights: &[f32], unfurl: f32, metrics: &Metrics) -> f32 {
     if heights.is_empty() {
         return 0.0;
     }
-    let last = pose(heights, deepest(heights.len(), unfurl), unfurl, theme);
-    header_height(heights.len(), unfurl, theme) + last.top + last.height
+    let last = pose(heights, deepest(heights.len(), unfurl), unfurl, metrics);
+    header_height(heights.len(), unfurl, metrics) + last.top + last.height
 }
 
 /// One app's cards, and how far the user has pulled them apart.
@@ -155,7 +154,7 @@ impl Deck {
     pub fn new(key: impl Into<String>) -> Self {
         Self {
             key: key.into(),
-            unfurl: Spring::with_profile(0.0, SpringProfile::SNAPPY),
+            unfurl: Spring::new(0.0, motion::Spring::snappy()),
         }
     }
 
@@ -165,30 +164,35 @@ impl Deck {
 
     /// Clamped to `0.0..=1.0`: every formula above assumes that range, and a
     /// snappy spring overshoots.
-    pub fn unfurl(&self) -> f32 {
-        self.unfurl.position.clamp(0.0, 1.0)
+    pub fn unfurl(&self, now: Duration) -> f32 {
+        self.unfurl.value(now).clamp(0.0, 1.0)
     }
 
-    pub fn is_open(&self) -> bool {
-        self.unfurl() >= OPEN
+    pub fn is_open(&self, now: Duration) -> bool {
+        self.unfurl(now) >= OPEN
+    }
+
+    /// Whether the user asked for the deck to be pulled apart, wherever its
+    /// spring has got to.
+    pub fn is_opening(&self) -> bool {
+        self.unfurl.target() > 0.5
     }
 
     /// Whether the unfurl is still moving, which is what tells the layout to
     /// drive this deck's cards directly instead of through their own springs.
-    pub fn is_settling(&self) -> bool {
-        !self.unfurl.at_rest()
+    pub fn is_settling(&self, now: Duration) -> bool {
+        !self.unfurl.at_rest(now)
     }
 
-    pub fn toggle(&mut self) {
-        let target = if self.unfurl.target > 0.5 { 0.0 } else { 1.0 };
-        self.unfurl.set_target(target);
+    pub fn toggle(&mut self, now: Duration) {
+        let target = if self.is_opening() { 0.0 } else { 1.0 };
+        self.unfurl.set_target(now, target);
     }
 
-    /// Puts the deck back together with no animation, for a surface that has
+    /// Puts the deck back together with no animation, for a window that has
     /// gone off screen and has nothing to animate for.
     pub fn collapse(&mut self) {
-        self.unfurl.set_target(0.0);
-        self.unfurl.snap_to_target();
+        self.unfurl.snap(0.0);
     }
 
     /// A deck of one is never unfurled — there is nothing behind its top card —
@@ -199,12 +203,8 @@ impl Deck {
         }
     }
 
-    pub fn step(&mut self, dt: f32) {
-        self.unfurl.step(dt);
-    }
-
-    pub fn at_rest(&self) -> bool {
-        self.unfurl.at_rest()
+    pub fn at_rest(&self, now: Duration) -> bool {
+        self.unfurl.at_rest(now)
     }
 }
 
@@ -212,29 +212,29 @@ impl Deck {
 mod tests {
     use super::*;
 
-    fn theme() -> Theme {
-        Theme::light()
+    fn metrics() -> Metrics {
+        Metrics::default()
     }
 
     #[test]
     fn a_collapsed_deck_steps_its_slivers_down_and_in() {
-        let theme = theme();
+        let metrics = metrics();
         let heights = [80.0, 80.0, 80.0];
-        let poses: Vec<_> = (0..3).map(|d| pose(&heights, d, 0.0, &theme)).collect();
+        let poses: Vec<_> = (0..3).map(|d| pose(&heights, d, 0.0, &metrics)).collect();
 
         assert_eq!(poses[0].top, 0.0);
-        assert_eq!(poses[1].top, theme.metrics.deck_peek);
-        assert_eq!(poses[2].top, 2.0 * theme.metrics.deck_peek);
+        assert_eq!(poses[1].top, metrics.deck_peek);
+        assert_eq!(poses[2].top, 2.0 * metrics.deck_peek);
         assert!(poses[0].inset < poses[1].inset && poses[1].inset < poses[2].inset);
         assert!(poses[0].alpha > poses[1].alpha && poses[1].alpha > poses[2].alpha);
     }
 
     #[test]
     fn an_unfurled_deck_stacks_its_cards_with_the_ordinary_gap() {
-        let theme = theme();
+        let metrics = metrics();
         let heights = [60.0, 90.0];
-        let second = pose(&heights, 1, 1.0, &theme);
-        assert_eq!(second.top, heights[0] + theme.metrics.card_gap);
+        let second = pose(&heights, 1, 1.0, &metrics);
+        assert_eq!(second.top, heights[0] + metrics.card_gap);
         assert_eq!(second.height, heights[1], "a card regains its own height");
         assert_eq!(second.inset, 0.0);
         assert_eq!(second.alpha, 1.0);
@@ -242,28 +242,28 @@ mod tests {
 
     #[test]
     fn a_deck_of_one_is_exactly_a_bare_card() {
-        let theme = theme();
+        let metrics = metrics();
         let heights = [74.0];
         for unfurl in [0.0, 0.5, 1.0] {
-            let only = pose(&heights, 0, unfurl, &theme);
+            let only = pose(&heights, 0, unfurl, &metrics);
             assert_eq!(only.top, 0.0);
             assert_eq!(only.height, 74.0);
             assert_eq!(only.inset, 0.0);
             assert_eq!(only.alpha, 1.0);
-            assert_eq!(height(&heights, unfurl, &theme), 74.0);
+            assert_eq!(height(&heights, unfurl, &metrics), 74.0);
         }
     }
 
     #[test]
     fn the_cards_of_a_deck_exactly_fill_the_height_it_reported() {
-        let theme = theme();
+        let metrics = metrics();
         let heights = [70.0, 84.0, 62.0, 90.0];
         for unfurl in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let last = deepest(heights.len(), unfurl);
-            let pose = pose(&heights, last, unfurl, &theme);
-            let expected = header_height(heights.len(), unfurl, &theme) + pose.top + pose.height;
+            let pose = pose(&heights, last, unfurl, &metrics);
+            let expected = header_height(heights.len(), unfurl, &metrics) + pose.top + pose.height;
             assert!(
-                (height(&heights, unfurl, &theme) - expected).abs() < f64::EPSILON,
+                (height(&heights, unfurl, &metrics) - expected).abs() < f32::EPSILON * 8.0,
                 "unfurl {unfurl}: the overflow scan and the placement pass disagree"
             );
         }
@@ -271,12 +271,12 @@ mod tests {
 
     #[test]
     fn a_half_open_deck_sits_between_its_collapsed_and_open_geometry() {
-        let theme = theme();
+        let metrics = metrics();
         let heights = [70.0, 84.0, 62.0];
         for depth in 0..heights.len() {
-            let closed = pose(&heights, depth, 0.0, &theme);
-            let open = pose(&heights, depth, 1.0, &theme);
-            let half = pose(&heights, depth, 0.5, &theme);
+            let closed = pose(&heights, depth, 0.0, &metrics);
+            let open = pose(&heights, depth, 1.0, &metrics);
+            let half = pose(&heights, depth, 0.5, &metrics);
             assert!(half.top >= closed.top && half.top <= open.top, "{depth}");
             assert!(
                 half.inset <= closed.inset && half.inset >= open.inset,
@@ -291,12 +291,12 @@ mod tests {
 
     #[test]
     fn a_card_is_back_at_full_width_before_its_text_appears() {
-        let theme = theme();
+        let metrics = metrics();
         let heights = [70.0, 84.0];
         for step in 0..=100 {
             let unfurl = step as f32 / 100.0;
             if content_alpha(1, unfurl) > 0.0 {
-                let behind = pose(&heights, 1, unfurl, &theme);
+                let behind = pose(&heights, 1, unfurl, &metrics);
                 assert_eq!(
                     behind.inset, 0.0,
                     "text shown while still inset at {unfurl}"
@@ -329,33 +329,32 @@ mod tests {
 
     #[test]
     fn a_clear_all_strip_opens_only_while_a_deck_of_more_than_one_is_unfurled() {
-        let theme = theme();
-        assert_eq!(header_height(1, 1.0, &theme), 0.0);
-        assert_eq!(header_height(3, 0.0, &theme), 0.0);
-        assert!(header_height(3, 1.0, &theme) > 0.0);
+        let metrics = metrics();
+        assert_eq!(header_height(1, 1.0, &metrics), 0.0);
+        assert_eq!(header_height(3, 0.0, &metrics), 0.0);
+        assert!(header_height(3, 1.0, &metrics) > 0.0);
     }
 
     #[test]
     fn a_deck_of_one_never_unfurls() {
         let mut deck = Deck::new("mail");
-        deck.toggle();
+        deck.toggle(Duration::ZERO);
         deck.sync_len(1);
-        assert_eq!(deck.unfurl(), 0.0);
-        assert!(!deck.is_open());
+        let later = Duration::from_secs(5);
+        assert_eq!(deck.unfurl(later), 0.0);
+        assert!(!deck.is_open(later));
     }
 
     #[test]
     fn toggling_a_deck_mid_flight_reverses_it_without_a_jump() {
         let mut deck = Deck::new("mail");
-        deck.toggle();
-        for _ in 0..3 {
-            deck.step(1.0 / 60.0);
-        }
-        let caught = deck.unfurl();
+        deck.toggle(Duration::ZERO);
+        let now = Duration::from_millis(50);
+        let caught = deck.unfurl(now);
         assert!(caught > 0.0 && caught < 1.0, "{caught}");
-        deck.toggle();
+        deck.toggle(now);
         assert!(
-            (deck.unfurl() - caught).abs() < f32::EPSILON,
+            (deck.unfurl(now) - caught).abs() < f32::EPSILON,
             "the position moved when only the target should have"
         );
     }

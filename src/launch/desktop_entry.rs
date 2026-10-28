@@ -96,9 +96,8 @@ fn strip_field_codes(exec: &str) -> String {
             out.push(character);
             continue;
         }
-        match chars.next() {
-            Some('%') => out.push('%'),
-            Some(_) | None => {}
+        if chars.next() == Some('%') {
+            out.push('%');
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")

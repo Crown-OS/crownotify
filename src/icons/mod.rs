@@ -1,39 +1,28 @@
-//! Turns an [`Icon`](crate::model::Icon) into pixels Vello can draw, with a
-//! cache that survives across frames.
+//! Turns an [`Icon`](crate::model::Icon) into straight-alpha RGBA pixels, with
+//! a cache that survives across cards.
 //!
-//! `paint` runs at up to 144 Hz, so nothing here may touch a filesystem or a
-//! decoder on the common path: every result — including a failed one — is
-//! cached by `(icon identity, size)`, and [`IconTheme`] scans directories
-//! once rather than per call. [`IconLoader::sweep`] is how an icon that
-//! stops being drawn (the notification it belonged to closed) eventually
-//! leaves the cache; nothing evicts eagerly, because eviction on every miss
-//! would defeat the point of caching a 144 Hz-hot path.
+//! A card decodes its pictures when it is built, so nothing here may touch a
+//! filesystem or a decoder twice for the same picture: every result —
+//! including a failed one — is cached by `(icon identity, size)`, and
+//! [`IconTheme`] scans directories once rather than per call.
+//! [`IconLoader::sweep`] is how an icon that stops being shown (the
+//! notification it belonged to closed) eventually leaves the cache.
 //!
-//! ## Premultiplication
+//! ## Alpha
 //!
-//! Vello's [`peniko::ImageData`] with [`ImageFormat::Rgba8`] and
-//! [`ImageAlphaType::AlphaPremultiplied`] expects every colour channel
-//! already scaled by that pixel's alpha. The three sources this loader reads
-//! disagree on that by default, so each decode path says explicitly, at the
-//! point it matters, which way it had to convert:
+//! crownui uploads straight-alpha RGBA, so that is what every path hands back:
 //!
-//! * `image` (PNG/JPEG/WebP/BMP) hands back straight alpha — the formats
-//!   themselves store colour and coverage independently — so it is
-//!   premultiplied here after decoding.
-//! * `resvg`/`tiny-skia` rasterise directly into premultiplied RGBA
-//!   (`tiny_skia::Pixmap::data` is documented as premultiplied, byte order
-//!   RGBA), so its output is used unchanged.
+//! * `image` (PNG/JPEG/WebP/BMP) already decodes to straight alpha.
+//! * `resvg`/`tiny-skia` rasterise into premultiplied RGBA
+//!   (`tiny_skia::Pixmap::data` is documented as such), so the SVG path
+//!   divides the alpha back out.
 //! * [`ImageData`](crate::model::ImageData) (the freedesktop `image-data`
-//!   hint) is premultiplied by [`ImageData::from_hint`] before it ever
-//!   reaches this module, per its own doc comment — also used unchanged,
-//!   except when it must be resized, which needs a straight-alpha round
-//!   trip in between (see `decode_data` below).
+//!   hint) is straight already, and at its native size is handed back as the
+//!   very same allocation.
 
 pub mod theme;
 
 use std::{collections::HashMap, fs, path::Path, sync::Arc};
-
-use vello::peniko::{Blob, ImageAlphaType, ImageData as PenikoImage, ImageFormat};
 
 pub use theme::IconTheme;
 
@@ -44,14 +33,9 @@ use crate::model::icon::{Icon, ImageData};
 /// [`Icon::Data`] is keyed by the address of its shared pixel buffer rather
 /// than its contents, which is the only way to make this key cheap to hash
 /// — hashing or comparing the pixels themselves would cost as much as the
-/// decode this cache exists to avoid. The tradeoff is that the key is only
-/// valid for as long as that `Arc` allocation lives; once every clone of it
-/// is dropped, the allocator is free to reuse the address for something
-/// else, which could in principle serve a stale image for one `sweep`
-/// interval. `sweep` is expected to run at least once between a
-/// notification closing and a new, unrelated one reusing that address in
-/// practice, which is the same assumption GPU texture caches keyed on
-/// pointer identity make.
+/// decode this cache exists to avoid. The key is only valid for as long as
+/// that `Arc` allocation lives; `sweep` is expected to run between a
+/// notification closing and a new, unrelated one reusing that address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CacheKey {
     Named(String, u32),
@@ -70,7 +54,7 @@ impl CacheKey {
 }
 
 struct CacheEntry {
-    image: Option<PenikoImage>,
+    image: Option<Arc<ImageData>>,
     touched: bool,
 }
 
@@ -93,9 +77,6 @@ impl IconLoader {
         }
     }
 
-    /// Builds a loader against an already-resolved theme, so callers (and
-    /// tests) that need a specific theme instead of whatever `detect` finds
-    /// don't have to touch the environment to get one.
     #[cfg(test)]
     fn with_theme(theme: IconTheme) -> Self {
         Self {
@@ -105,12 +86,10 @@ impl IconLoader {
         }
     }
 
-    /// Rasterised RGBA at `size` logical px, ready to blit. `None` when the
-    /// icon cannot be resolved or decoded — callers draw a fallback glyph.
-    ///
-    /// A cache hit is a hashmap lookup plus an `Arc` clone of the pixel
-    /// blob, never a re-decode, whether the icon resolved or not.
-    pub fn load(&mut self, icon: &Icon, size: u32) -> Option<PenikoImage> {
+    /// Straight-alpha RGBA no larger than `size` px on its longest edge.
+    /// `None` when the icon cannot be resolved or decoded — callers draw a
+    /// fallback.
+    pub fn load(&mut self, icon: &Icon, size: u32) -> Option<Arc<ImageData>> {
         let key = CacheKey::for_icon(icon, size);
         if let Some(entry) = self.cache.get_mut(&key) {
             entry.touched = true;
@@ -140,7 +119,7 @@ impl IconLoader {
         self.cache.clear();
     }
 
-    fn decode(&mut self, icon: &Icon, size: u32) -> Option<PenikoImage> {
+    fn decode(&mut self, icon: &Icon, size: u32) -> Option<Arc<ImageData>> {
         #[cfg(test)]
         {
             self.decodes += 1;
@@ -148,9 +127,9 @@ impl IconLoader {
         match icon {
             Icon::Named(name) => {
                 let path = self.theme.lookup(name, size)?;
-                decode_path(&path, size)
+                decode_path(&path, size).map(Arc::new)
             }
-            Icon::Path(path) => decode_path(path, size),
+            Icon::Path(path) => decode_path(path, size).map(Arc::new),
             Icon::Data(data) => decode_data(data, size),
         }
     }
@@ -162,7 +141,7 @@ impl Default for IconLoader {
     }
 }
 
-fn decode_path(path: &Path, size: u32) -> Option<PenikoImage> {
+fn decode_path(path: &Path, size: u32) -> Option<ImageData> {
     let is_svg = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -190,30 +169,11 @@ fn scaled_dimensions(width: u32, height: u32, size: u32) -> (u32, u32) {
     )
 }
 
-/// Scales every pixel's colour channels by its own alpha, in place.
-///
-/// Matches the `+ 127` rounding [`crate::model::icon`] uses for the same
-/// operation, so a pixel that survives both a hint decode and a raster
-/// decode round-trips identically.
-fn premultiply(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = u16::from(pixel[3]);
-        for channel in &mut pixel[..3] {
-            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
-        }
-    }
-}
-
-/// Reverses [`premultiply`], needed only when a source that already arrived
-/// premultiplied ([`Icon::Data`]) has to be resized: `image::imageops::resize`
-/// blends neighbouring pixels assuming straight alpha, and blending
-/// premultiplied colour directly would darken translucent edges.
+/// Divides every pixel's colour channels by its own alpha, in place.
 fn unpremultiply(rgba: &mut [u8]) {
     for pixel in rgba.chunks_exact_mut(4) {
         let alpha = pixel[3];
         if alpha == 0 {
-            // Colour is unobservable at zero coverage; leave it as-is rather
-            // than divide by zero.
             continue;
         }
         for channel in &mut pixel[..3] {
@@ -223,36 +183,29 @@ fn unpremultiply(rgba: &mut [u8]) {
     }
 }
 
-fn decode_raster(bytes: &[u8], size: u32) -> Option<PenikoImage> {
-    let image = image::load_from_memory(bytes).ok()?.into_rgba8();
+fn resized(image: image::RgbaImage, size: u32) -> ImageData {
     let (src_width, src_height) = image.dimensions();
     let (width, height) = scaled_dimensions(src_width, src_height, size);
-    let image = if (width, height) != (src_width, src_height) {
-        image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle)
-    } else {
+    let image = if (width, height) == (src_width, src_height) {
         image
+    } else {
+        image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle)
     };
-
-    let mut rgba = image.into_raw();
-    // `image`'s PNG/JPEG/WebP/BMP decoders all hand back straight alpha —
-    // none of those formats store colour pre-scaled by coverage — so Vello's
-    // premultiplied expectation is met by converting here, once, at decode
-    // time rather than on every frame this icon is drawn.
-    premultiply(&mut rgba);
-
-    Some(PenikoImage {
-        data: Blob::from(rgba),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::AlphaPremultiplied,
+    ImageData {
         width,
         height,
-    })
+        rgba: image.into_raw(),
+    }
 }
 
-fn decode_svg(bytes: &[u8], size: u32) -> Option<PenikoImage> {
+fn decode_raster(bytes: &[u8], size: u32) -> Option<ImageData> {
+    let image = image::load_from_memory(bytes).ok()?.into_rgba8();
+    Some(resized(image, size))
+}
+
+fn decode_svg(bytes: &[u8], size: u32) -> Option<ImageData> {
     let edge = size.max(1);
-    let options = usvg::Options::default();
-    let tree = usvg::Tree::from_data(bytes, &options).ok()?;
+    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
 
     let source = tree.size();
     let target = edge as f32;
@@ -262,33 +215,16 @@ fn decode_svg(bytes: &[u8], size: u32) -> Option<PenikoImage> {
     let mut pixmap = tiny_skia::Pixmap::new(edge, edge)?;
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    // `tiny_skia::Pixmap::data` is documented as premultiplied RGBA already
-    // — resvg rasterises straight into the format Vello wants, so unlike the
-    // raster path above there is nothing to convert here.
-    let rgba = pixmap.data().to_vec();
-
-    Some(PenikoImage {
-        data: Blob::from(rgba),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::AlphaPremultiplied,
+    let mut rgba = pixmap.take();
+    unpremultiply(&mut rgba);
+    Some(ImageData {
         width: edge,
         height: edge,
+        rgba,
     })
 }
 
-/// Wraps a notification's own decoded pixels so they can be handed to
-/// [`Blob::new`] without copying them — the loader never mutates this data,
-/// only shares it, so the toast and the center can point at the same
-/// allocation the D-Bus thread produced.
-struct SharedRgba(Arc<ImageData>);
-
-impl AsRef<[u8]> for SharedRgba {
-    fn as_ref(&self) -> &[u8] {
-        &self.0.rgba
-    }
-}
-
-fn decode_data(data: &Arc<ImageData>, size: u32) -> Option<PenikoImage> {
+fn decode_data(data: &Arc<ImageData>, size: u32) -> Option<Arc<ImageData>> {
     let expected = (data.width as usize)
         .checked_mul(data.height as usize)
         .and_then(|pixels| pixels.checked_mul(4))?;
@@ -299,42 +235,11 @@ fn decode_data(data: &Arc<ImageData>, size: u32) -> Option<PenikoImage> {
         // infallible against a malicious or merely buggy notifier.
         return None;
     }
-
-    let (width, height) = scaled_dimensions(data.width, data.height, size);
-    if (width, height) == (data.width, data.height) {
-        let blob = Blob::new(Arc::new(SharedRgba(data.clone())));
-        return Some(PenikoImage {
-            data: blob,
-            format: ImageFormat::Rgba8,
-            alpha_type: ImageAlphaType::AlphaPremultiplied,
-            width,
-            height,
-        });
+    if scaled_dimensions(data.width, data.height, size) == (data.width, data.height) {
+        return Some(Arc::clone(data));
     }
-
-    // `ImageData` arrives already premultiplied (see its own doc comment),
-    // but `image::imageops::resize` blends neighbours assuming straight
-    // alpha, so this round-trips through straight alpha for the resize and
-    // back rather than resampling premultiplied colour directly.
-    let mut straight = data.rgba.clone();
-    unpremultiply(&mut straight);
-    let buffer = image::RgbaImage::from_raw(data.width, data.height, straight)?;
-    let resized = image::imageops::resize(
-        &buffer,
-        width,
-        height,
-        image::imageops::FilterType::Triangle,
-    );
-    let mut rgba = resized.into_raw();
-    premultiply(&mut rgba);
-
-    Some(PenikoImage {
-        data: Blob::from(rgba),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::AlphaPremultiplied,
-        width,
-        height,
-    })
+    let buffer = image::RgbaImage::from_raw(data.width, data.height, data.rgba.clone())?;
+    Some(Arc::new(resized(buffer, size)))
 }
 
 #[cfg(test)]
@@ -369,7 +274,6 @@ mod tests {
             image.height, 32,
             "height should be downscaled to the requested size"
         );
-        assert_eq!(image.alpha_type, ImageAlphaType::AlphaPremultiplied);
     }
 
     #[test]
@@ -391,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn a_half_transparent_pixel_is_premultiplied_on_the_raster_path() {
+    fn a_half_transparent_pixel_keeps_its_straight_colour_on_the_raster_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("translucent.png");
         // Straight alpha: full-intensity red at 50% coverage.
@@ -402,12 +306,11 @@ mod tests {
             .load(&Icon::Path(path), 4)
             .expect("a valid png should decode");
 
-        let pixels = image.data.data();
         assert_eq!(
-            pixels[0..4],
-            [128, 0, 0, 128],
-            "the red channel should be scaled down by the 50% alpha, got {:?}",
-            &pixels[0..4]
+            image.rgba[0..4],
+            [255, 0, 0, 128],
+            "the red channel must not be scaled by the alpha, got {:?}",
+            &image.rgba[0..4]
         );
     }
 
@@ -504,9 +407,7 @@ mod tests {
             .load(&Icon::Data(data.clone()), 2)
             .expect("valid image data should decode");
 
-        assert_eq!(image.width, 2);
-        assert_eq!(image.height, 2);
-        assert_eq!(image.data.data(), data.rgba.as_slice());
+        assert!(Arc::ptr_eq(&image, &data), "the pixels were copied");
     }
 
     #[test]

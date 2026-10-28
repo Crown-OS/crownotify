@@ -119,7 +119,7 @@ impl CloseReason {
 }
 
 /// One notification, as the daemon understands it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Notification {
     pub id: NotificationId,
     pub app: AppIdentity,

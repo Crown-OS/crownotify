@@ -1,6 +1,6 @@
 //! crownotify — the CrownOS notification server.
 //!
-//! The daemon is split into three layers that never reach across each other:
+//! The daemon is split into layers that never reach across each other:
 //!
 //! * [`model`] and [`store`] are the pure core. They own what a notification
 //!   *is* and which ones are currently on screen, and they depend on nothing
@@ -9,13 +9,15 @@
 //! * [`dbus`] and [`ipc`] are the transports. They translate
 //!   `org.freedesktop.Notifications` calls and crownos-ipc requests into the
 //!   core's vocabulary and publish the results back out.
-//! * [`ui`], [`surface`], [`icons`] and [`profile`] are the presentation. They
-//!   read the store and paint it; they never decide policy.
+//! * [`daemon`] is where the two meet: the store, the crownos-ipc service and
+//!   the expiry timer on one calloop loop of their own.
+//! * [`ui`], [`icons`] and [`profile`] are the presentation: two crownui
+//!   windows that draw the daemon's snapshots and never decide policy.
 //!
-//! The store lives on the compositor's event-loop thread and is never locked.
-//! The only state shared with the D-Bus thread is the notification id counter
-//! (see [`Store::id_counter`]), because ids must be handed back to the caller
-//! of `Notify` synchronously, before the UI thread has seen the request.
+//! The store lives on the core thread and is never locked. The only state
+//! shared with the D-Bus thread is the notification id counter (see
+//! [`Store::id_counter`]), because ids must be handed back to the caller of
+//! `Notify` synchronously, before the core has seen the request.
 
 pub mod proto;
 
@@ -23,6 +25,8 @@ pub mod proto;
 // builds none of it — see the `daemon` feature in Cargo.toml.
 #[cfg(feature = "daemon")]
 pub mod config;
+#[cfg(feature = "daemon")]
+pub mod daemon;
 #[cfg(feature = "daemon")]
 pub mod dbus;
 #[cfg(feature = "daemon")]
@@ -41,8 +45,6 @@ pub mod model;
 pub mod profile;
 #[cfg(feature = "daemon")]
 pub mod store;
-#[cfg(feature = "daemon")]
-pub mod surface;
 #[cfg(feature = "daemon")]
 pub mod ui;
 #[cfg(feature = "daemon")]

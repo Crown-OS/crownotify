@@ -12,7 +12,7 @@ use chrono::{DateTime, Local};
 use crate::model::icon::Icon;
 
 /// The shape of the card, and the data only that shape needs.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum Content {
     #[default]
     General,
@@ -26,7 +26,7 @@ pub enum Content {
 ///
 /// `call_id` is what the pickup and decline buttons send back, so it has to
 /// survive a replacement of the notification untouched.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Call {
     pub call_id: String,
     pub contact: String,
@@ -36,7 +36,7 @@ pub struct Call {
 
 /// A message in a conversation, which is what makes inline reply meaningful:
 /// `conversation_id` is the address the reply is sent to.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Chat {
     pub conversation_id: String,
     pub sender: String,
@@ -47,7 +47,7 @@ pub struct Chat {
 
 /// Now-playing state. The card is a remote control, so it holds the transport
 /// state rather than deriving it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Music {
     pub title: String,
     pub artist: String,
@@ -58,7 +58,7 @@ pub struct Music {
 }
 
 /// A long-running operation, drawn as a labelled bar.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
     pub label: String,
     /// Completion, 0-100.

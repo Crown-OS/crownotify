@@ -16,7 +16,7 @@
 pub mod spotify;
 pub mod table;
 
-use crownshell::peniko::Color;
+use crownui::prelude::Color;
 
 use crate::model::Icon;
 

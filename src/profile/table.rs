@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crownshell::peniko::Color;
+use crownui::prelude::Color;
 
 use crate::{
     config::Config,

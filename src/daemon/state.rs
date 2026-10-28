@@ -1,31 +1,24 @@
-//! The state both surfaces stand on, and the seam where UI intent becomes
-//! transport traffic.
+//! The daemon's state, and the seam where intent becomes transport traffic.
 //!
-//! crownshell is single-threaded, so `Rc<RefCell<_>>` is all the sharing the
-//! toast strip and the notification center need. What the two surfaces cannot
-//! do is repaint each other: every callback in [`SurfaceHandler`] repaints only
-//! the surface the event landed on. That is what [`Shared::version`] is for —
-//! each surface remembers the version it last painted and reports
-//! [`SurfaceHandler::needs_redraw`] when the two differ, so a click on a toast
-//! can repaint the center.
+//! [`Daemon`] lives on the core thread's calloop loop together with the
+//! crownos-ipc service, so a request reaches the store without a lock; the
+//! windows never touch it. They see it only as the [`Snapshot`]s the core
+//! publishes and reach it only through [`Request`]s, which is what lets the
+//! toast strip and the notification center run on another thread entirely.
+//!
+//! [`Snapshot`]: crate::daemon::Snapshot
+//! [`Request`]: crate::daemon::Request
 //!
 //! # Why nothing here publishes inline
 //!
 //! Every `Outgoing` this module produces is appended to a queue and published
-//! later, by [`drain_outgoing`](Shared::drain_outgoing) from the event loop.
+//! later, by [`drain_outgoing`](Daemon::drain_outgoing) from the event loop.
 //! `CalloopService` forbids emitting through the service while inside its own
 //! `dispatch`, and an IPC request reaches the store through exactly the same
-//! [`NotificationSink`] methods a pointer click does — so there is no way to
+//! [`NotificationSink`] methods a window's request does — so there is no way to
 //! tell "safe to emit now" from "about to abort the process" at the point the
 //! event is produced. Deferring all of them leaves one code path, no
 //! re-entrancy and no ordering surprises.
-//!
-//! [`SurfaceHandler`]: crownshell::SurfaceHandler
-//! [`SurfaceHandler::needs_redraw`]: crownshell::SurfaceHandler::needs_redraw
-
-pub mod cards;
-pub mod center;
-pub mod popup;
 
 use std::{
     cell::{Ref, RefCell, RefMut},
@@ -35,53 +28,23 @@ use std::{
 use calloop::ping::Ping;
 
 use crate::{
-    icons::IconLoader,
     ipc::{Incoming, NotificationSink, Outgoing, OutgoingSender, PhoneCommand, PhoneLink},
     launch::{ExecLauncher, Launcher},
     model::{CloseReason, Content, Notification, NotificationId},
-    profile::table::Profiles,
     store::Store,
-    ui::{CardAction, MediaAction, Theme},
+    ui::{CardAction, MediaAction},
 };
 
-pub use center::Center;
-pub use popup::Popup;
-
-/// What the surface still has to do to its own card once [`Shared::perform`]
-/// has dealt with the store and the transports.
+/// The only mutable state in the daemon.
 ///
-/// The split exists because a reply's text lives in the [`Card`] — the widget
-/// the user typed into — and never reaches the store, so the surface has to be
-/// the one to drain it.
-///
-/// [`Card`]: crate::ui::Card
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CardOutcome {
-    /// Nothing further: the action was entirely a matter of state.
-    Handled,
-    /// Open and focus this card's inline reply field.
-    FocusReply,
-    /// Drain the field with `Card::take_reply` and hand the text to
-    /// [`Shared::submit_reply`].
-    SubmitReply,
-    /// Open or close the card's overflow menu.
-    ToggleMenu,
-}
-
-/// Everything the two surfaces read, and the only mutable state in the daemon.
-///
-/// Built once in `main` and never moved afterwards; the surfaces, the IPC
-/// service and the D-Bus channel callback all hold a [`SharedState`] handle to
-/// it.
-pub struct Shared {
+/// Built once on the core thread and never moved afterwards; the IPC service,
+/// the D-Bus channel callback and the windows' request channel all hold a
+/// [`DaemonState`] handle to it.
+pub struct Daemon {
     pub store: Store,
-    pub theme: Theme,
-    /// The static registry merged with the user's per-app config, built once.
-    pub profiles: Profiles,
     /// How a card reaches the app it came from. Boxed so the tests can record
     /// activations instead of spawning processes.
     launcher: Box<dyn Launcher>,
-    pub icons: IconLoader,
     pub phone: PhoneLink,
     /// The D-Bus thread's end of the outgoing stream. Written by
     /// [`drain_outgoing`](Self::drain_outgoing)'s caller, never from here.
@@ -90,7 +53,8 @@ pub struct Shared {
     /// The last Do Not Disturb state published, so a switch between two modes
     /// does not re-announce a bool that did not change.
     announced_quiet: bool,
-    /// Bumped by every change a surface could need to redraw for.
+    /// Bumped by every change a window could need to redraw for; the core
+    /// publishes a fresh [`Snapshot`] whenever it moved.
     pub version: u64,
     /// Events waiting to be published. Never drained from inside the call that
     /// produced them — see the module documentation.
@@ -100,26 +64,17 @@ pub struct Shared {
     wake: Option<Ping>,
 }
 
-impl Shared {
+impl Daemon {
     /// Replaces the launcher, which the tests use to record activations rather
     /// than start anything.
     pub fn set_launcher(&mut self, launcher: Box<dyn Launcher>) {
         self.launcher = launcher;
     }
 
-    /// Replaces the profile table, which `main` builds from the same config the
-    /// store came from.
-    pub fn set_profiles(&mut self, profiles: Profiles) {
-        self.profiles = profiles;
-    }
-
-    pub fn new(store: Store, theme: Theme, outgoing: OutgoingSender) -> Self {
+    pub fn new(store: Store, outgoing: OutgoingSender) -> Self {
         Self {
             store,
-            theme,
-            profiles: Profiles::default(),
             launcher: Box::new(ExecLauncher),
-            icons: IconLoader::new(),
             phone: PhoneLink::new(),
             outgoing,
             center_open: false,
@@ -133,13 +88,12 @@ impl Shared {
     /// Points the queue at the event loop that will drain it.
     ///
     /// Separate from [`new`](Self::new) because the loop does not exist yet
-    /// when the store is built: `main` needs the store's id counter before it
-    /// can start the D-Bus thread, which happens before `crownshell::run`.
+    /// when the daemon is built: the loop is made on the core thread.
     pub fn set_wake(&mut self, wake: Ping) {
         self.wake = Some(wake);
     }
 
-    /// Marks the state dirty so every surface repaints on the next iteration.
+    /// Marks the state dirty so every window gets a fresh snapshot.
     pub fn bump(&mut self) {
         self.version = self.version.wrapping_add(1);
     }
@@ -310,9 +264,10 @@ impl Shared {
         self.close(id, CloseReason::Dismissed);
     }
 
-    /// Carries out everything about `action` that is not the card's own
-    /// business, and says what is left for the surface to do.
-    pub fn perform(&mut self, id: NotificationId, action: &CardAction) -> CardOutcome {
+    /// Carries out everything about `action` that reaches past the window it
+    /// was clicked in. Reply fields, menus and decks are the windows' own
+    /// business and leave the daemon untouched.
+    pub fn perform(&mut self, id: NotificationId, action: &CardAction) {
         if let Some(command) = self
             .store
             .get(id)
@@ -322,38 +277,21 @@ impl Shared {
         }
 
         match action {
-            CardAction::Activate => {
-                self.activate(id);
-                CardOutcome::Handled
-            }
-            CardAction::Dismiss => {
-                self.close(id, CloseReason::Dismissed);
-                CardOutcome::Handled
-            }
-            CardAction::Invoke(key) => {
-                self.invoke_action(id, key);
-                CardOutcome::Handled
-            }
-            CardAction::FocusReply => CardOutcome::FocusReply,
-            CardAction::SubmitReply => CardOutcome::SubmitReply,
+            CardAction::Activate => self.activate(id),
+            CardAction::Invoke(key) => self.invoke_action(id, key),
             // Answering or hanging up ends the card's reason to exist; the
             // phone command has already gone out above.
-            // Both belong to the surface that drew the deck: only it knows how
-            // far the unfurl spring has got and whether the deck holds live
-            // toasts or history.
-            CardAction::ToggleStack(_) | CardAction::ClearStack(_) => CardOutcome::Handled,
-            // The menu's state lives in the card that drew it.
-            CardAction::ToggleMenu => CardOutcome::ToggleMenu,
-            CardAction::Answer | CardAction::Decline => {
-                self.close(id, CloseReason::Dismissed);
-                CardOutcome::Handled
+            CardAction::Dismiss | CardAction::Answer | CardAction::Decline => {
+                self.close(id, CloseReason::Dismissed)
             }
             // A transport button leaves the card up — the whole point of a
             // now-playing card is to be pressed again.
-            CardAction::Media(_) => {
-                self.bump();
-                CardOutcome::Handled
-            }
+            CardAction::Media(_) => self.bump(),
+            CardAction::FocusReply
+            | CardAction::SubmitReply
+            | CardAction::ToggleStack(_)
+            | CardAction::ClearStack(_)
+            | CardAction::ToggleMenu => {}
         }
     }
 
@@ -405,24 +343,24 @@ impl Shared {
 }
 
 /// A handle to the daemon's state, cheap to clone and safe to hold in every
-/// surface, callback and service.
+/// callback and service on the core thread.
 #[derive(Clone)]
-pub struct SharedState(Rc<RefCell<Shared>>);
+pub struct DaemonState(Rc<RefCell<Daemon>>);
 
-impl SharedState {
-    pub fn new(shared: Shared) -> Self {
-        Self(Rc::new(RefCell::new(shared)))
+impl DaemonState {
+    pub fn new(daemon: Daemon) -> Self {
+        Self(Rc::new(RefCell::new(daemon)))
     }
 
-    pub fn borrow(&self) -> Ref<'_, Shared> {
+    pub fn borrow(&self) -> Ref<'_, Daemon> {
         self.0.borrow()
     }
 
-    pub fn borrow_mut(&self) -> RefMut<'_, Shared> {
+    pub fn borrow_mut(&self) -> RefMut<'_, Daemon> {
         self.0.borrow_mut()
     }
 
-    /// Marks state dirty so every surface repaints on the next loop iteration.
+    /// Marks state dirty so every window gets a fresh snapshot.
     pub fn bump(&self) {
         self.borrow_mut().bump();
     }
@@ -434,9 +372,9 @@ impl SharedState {
 
 /// The sink both transports are written against.
 ///
-/// Every method is the corresponding [`Shared`] one, so an IPC request and a
+/// Every method is the corresponding [`Daemon`] one, so an IPC request and a
 /// D-Bus request that mean the same thing cannot behave differently.
-impl NotificationSink for SharedState {
+impl NotificationSink for DaemonState {
     fn post(&mut self, notification: Notification) -> NotificationId {
         self.borrow_mut().post(notification)
     }
@@ -470,7 +408,7 @@ impl NotificationSink for SharedState {
 ///
 /// This is the one place `ui` and `ipc` meet: [`CardAction`] deliberately names
 /// no transport type, so that a card can be asserted on without a socket, and
-/// the translation is stated once here rather than in each surface. The
+/// the translation is stated once here rather than in each window. The
 /// notification's [`Content`] is needed because answering addresses a specific
 /// call and replying a specific conversation — the action alone does not say
 /// which.
@@ -524,25 +462,23 @@ mod tests {
     use crate::{
         model::{Action, ActionKind, Call, Chat, Music},
         store::StoreConfig,
-        ui::{Card, Theme},
     };
     use chrono::Local;
-    use crownshell::TextContext;
 
-    fn shared() -> Shared {
+    fn shared() -> Daemon {
         let (outgoing, _receiver) = async_channel::unbounded();
-        Shared::new(Store::new(StoreConfig::default()), Theme::light(), outgoing)
+        Daemon::new(Store::new(StoreConfig::default()), outgoing)
     }
 
-    fn state() -> SharedState {
-        SharedState::new(shared())
+    fn state() -> DaemonState {
+        DaemonState::new(shared())
     }
 
     fn notification(app: &str) -> Notification {
         Notification::builder(app).summary("Ada").build()
     }
 
-    fn drained(shared: &mut Shared) -> Vec<Outgoing> {
+    fn drained(shared: &mut Daemon) -> Vec<Outgoing> {
         let mut out = Vec::new();
         shared.drain_outgoing(&mut out);
         out
@@ -550,7 +486,7 @@ mod tests {
 
     /// The published events as strings, which is enough to assert order and
     /// identity without `Outgoing` having to be `PartialEq`.
-    fn published(shared: &mut Shared) -> Vec<String> {
+    fn published(shared: &mut Daemon) -> Vec<String> {
         drained(shared)
             .into_iter()
             .map(|event| format!("{event:?}"))
@@ -586,7 +522,7 @@ mod tests {
         assert_eq!(state.borrow().store.toasts().len(), 1);
         assert!(
             state.version() > before,
-            "the surfaces were not told to repaint: {} -> {}",
+            "the windows were not told to redraw: {} -> {}",
             before,
             state.version()
         );
@@ -902,10 +838,7 @@ mod tests {
         );
         let _ = published(&mut shared);
 
-        assert_eq!(
-            shared.perform(id, &CardAction::Answer),
-            CardOutcome::Handled
-        );
+        shared.perform(id, &CardAction::Answer);
         assert_eq!(
             shared.phone.queued(),
             1,
@@ -984,11 +917,6 @@ mod tests {
         );
         let _ = published(&mut shared);
 
-        assert_eq!(
-            shared.perform(id, &CardAction::SubmitReply),
-            CardOutcome::SubmitReply,
-            "the text lives in the card, so the surface has to drain it"
-        );
         shared.submit_reply(id, "on my way".to_string());
 
         assert_eq!(shared.phone.queued(), 1);
@@ -1018,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn focusing_a_reply_is_left_entirely_to_the_surface() {
+    fn focusing_a_reply_is_left_entirely_to_the_window() {
         let mut shared = shared();
         let id = shared.post(
             Notification::builder("Signal")
@@ -1027,10 +955,7 @@ mod tests {
         );
         let _ = published(&mut shared);
 
-        assert_eq!(
-            shared.perform(id, &CardAction::FocusReply),
-            CardOutcome::FocusReply
-        );
+        shared.perform(id, &CardAction::FocusReply);
         assert!(published(&mut shared).is_empty());
         assert_eq!(shared.store.toasts().len(), 1);
     }
@@ -1039,7 +964,7 @@ mod tests {
     fn the_version_counter_rises_on_every_change_and_stands_still_otherwise() {
         let mut shared = shared();
         let mut previous = shared.version;
-        let mut moved = |shared: &Shared| {
+        let mut moved = |shared: &Daemon| {
             let changed = shared.version != previous;
             previous = shared.version;
             changed
@@ -1063,9 +988,8 @@ mod tests {
         assert!(moved(&shared), "clearing history");
     }
 
-    /// The counter is what `needs_redraw` compares, and both surfaces read the
-    /// same one, so a toast surface's click has to be able to repaint the
-    /// center.
+    /// The counter is what the core compares before publishing a snapshot, so
+    /// a change through any handle has to be visible through every other.
     #[test]
     fn a_bump_through_one_handle_is_visible_through_every_other() {
         let state = state();
@@ -1074,205 +998,6 @@ mod tests {
 
         state.bump();
         assert_eq!(other.version(), before + 1);
-    }
-
-    // ------------------------------------------------------------------
-    // popup: stack reconciliation, swipe threshold, velocity conversion
-    // ------------------------------------------------------------------
-
-    fn reconciled(cards: &mut Vec<Card>, scratch: &mut Vec<Card>, store: &Store) -> usize {
-        let mut decks = cards::Decks::default();
-        let mut groups = store.toast_groups();
-        groups.reverse();
-        cards::reconcile(cards, scratch, &mut decks, &groups, &Theme::light(), 0.0)
-    }
-
-    #[test]
-    fn reconciliation_builds_a_card_for_every_toast_in_stack_order() {
-        let mut shared = shared();
-        let first = shared.post(notification("Mail"));
-        let second = shared.post(notification("Chat"));
-
-        let (mut cards, mut scratch) = (Vec::new(), Vec::new());
-        let live = reconciled(&mut cards, &mut scratch, &shared.store);
-
-        assert_eq!(live, 2);
-        assert_eq!(
-            cards.iter().map(|card| card.id).collect::<Vec<_>>(),
-            vec![first, second]
-        );
-    }
-
-    #[test]
-    fn reconciliation_keeps_the_card_a_replacement_replaced() {
-        let mut shared = shared();
-        let id = shared.post(notification("Mail"));
-        let (mut cards, mut scratch) = (Vec::new(), Vec::new());
-        reconciled(&mut cards, &mut scratch, &shared.store);
-        let entering = cards[0].animation.alpha();
-
-        let mut replacement = Notification::builder("Mail").summary("Ada, again").build();
-        replacement.id = id;
-        shared.store.post(replacement);
-        let live = reconciled(&mut cards, &mut scratch, &shared.store);
-
-        assert_eq!(live, 1);
-        assert_eq!(cards.len(), 1, "the replacement built a second card");
-        assert_eq!(
-            cards[0].animation.alpha(),
-            entering,
-            "the card was rebuilt, so its animation restarted"
-        );
-    }
-
-    #[test]
-    fn a_card_whose_notification_left_the_store_starts_leaving_and_is_kept() {
-        let mut shared = shared();
-        let staying = shared.post(notification("Mail"));
-        let going = shared.post(notification("Chat"));
-        let (mut cards, mut scratch) = (Vec::new(), Vec::new());
-        reconciled(&mut cards, &mut scratch, &shared.store);
-
-        shared.close(going, CloseReason::Dismissed);
-        let live = reconciled(&mut cards, &mut scratch, &shared.store);
-
-        assert_eq!(live, 1, "only one toast is still on the stack");
-        assert_eq!(cards.len(), 2, "the departing card was dropped too early");
-        assert_eq!(cards[0].id, staying);
-        assert_eq!(cards[1].id, going);
-        assert_eq!(
-            cards[1].animation.phase,
-            crate::ui::Phase::Leaving,
-            "the departing card was not asked to leave"
-        );
-    }
-
-    #[test]
-    fn a_leaving_card_is_dropped_only_once_its_animation_says_so() {
-        let mut shared = shared();
-        let id = shared.post(notification("Mail"));
-        let (mut cards, mut scratch) = (Vec::new(), Vec::new());
-        reconciled(&mut cards, &mut scratch, &shared.store);
-        shared.close(id, CloseReason::Dismissed);
-        reconciled(&mut cards, &mut scratch, &shared.store);
-
-        let mut frames = 0;
-        while !cards.is_empty() && frames < 600 {
-            cards.retain_mut(|card| card.animation.step(1.0 / 60.0));
-            reconciled(&mut cards, &mut scratch, &shared.store);
-            frames += 1;
-        }
-        assert!(cards.is_empty(), "the card never finished leaving");
-        assert!(
-            frames > 1,
-            "the card was dropped on the first frame, so nothing animated"
-        );
-    }
-
-    #[test]
-    fn only_a_rightward_drag_past_the_threshold_dismisses() {
-        assert!(!popup::is_swipe(0.0));
-        assert!(!popup::is_swipe(39.9));
-        assert!(popup::is_swipe(popup::SWIPE_THRESHOLD));
-        assert!(popup::is_swipe(120.0));
-        assert!(
-            !popup::is_swipe(-80.0),
-            "dragging a card back towards the screen is not a dismissal"
-        );
-    }
-
-    #[test]
-    fn a_pointer_velocity_becomes_a_reveal_velocity_in_card_widths_per_second() {
-        // One card width per second to the right is one reveal unit per second
-        // towards off-screen, which the spring spells as negative.
-        assert_eq!(popup::dismiss_velocity(376.0, 376.0), -1.0);
-        assert_eq!(popup::dismiss_velocity(1880.0, 376.0), -5.0);
-        assert_eq!(popup::dismiss_velocity(0.0, 376.0), 0.0);
-        assert_eq!(
-            popup::dismiss_velocity(400.0, 0.0),
-            0.0,
-            "a card with no width must not divide by zero"
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // center: scroll clamping and group collapsing
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn scrolling_stops_at_the_top_and_at_the_end_of_the_content() {
-        assert_eq!(center::clamp_scroll(-40.0, 900.0, 400.0), 0.0);
-        assert_eq!(center::clamp_scroll(120.0, 900.0, 400.0), 120.0);
-        assert_eq!(center::clamp_scroll(4000.0, 900.0, 400.0), 500.0);
-    }
-
-    #[test]
-    fn content_that_fits_the_panel_does_not_scroll_at_all() {
-        assert_eq!(center::clamp_scroll(200.0, 300.0, 400.0), 0.0);
-        assert_eq!(center::clamp_scroll(0.0, 0.0, 400.0), 0.0);
-    }
-
-    /// Cards are retained, so the center must not rebuild one it already has —
-    /// each rebuild throws away a shaped Parley layout.
-    #[test]
-    fn the_center_keeps_the_cards_it_already_built() {
-        let mut shared = shared();
-        let id = shared.post(notification("Mail"));
-        shared.close(id, CloseReason::Dismissed);
-
-        let mut tcx = TextContext::new();
-        let theme = Theme::light();
-        let groups = shared.store.groups();
-        let mut cards = Vec::new();
-        let mut scratch = Vec::new();
-        let mut decks = cards::Decks::default();
-        cards::reconcile(&mut cards, &mut scratch, &mut decks, &groups, &theme, 0.0);
-        let before = cards[0].measure(
-            theme.metrics.card_width,
-            &mut crate::ui::MeasureCtx {
-                text: &mut tcx,
-                theme: &theme,
-            },
-        );
-
-        cards::reconcile(&mut cards, &mut scratch, &mut decks, &groups, &theme, 0.0);
-        assert_eq!(cards.len(), 1, "the card was rebuilt rather than kept");
-        assert!(
-            !cards[0].needs_measure(),
-            "a retained card lost its measurement, and with it its shaped text"
-        );
-        assert_eq!(
-            cards[0].measure(
-                theme.metrics.card_width,
-                &mut crate::ui::MeasureCtx {
-                    text: &mut tcx,
-                    theme: &theme
-                }
-            ),
-            before
-        );
-    }
-
-    #[test]
-    fn the_center_builds_a_card_for_an_entry_it_has_never_seen() {
-        let mut shared = shared();
-        let id = shared.post(notification("Mail"));
-        shared.close(id, CloseReason::Dismissed);
-
-        let mut cards = Vec::new();
-        let mut scratch = Vec::new();
-        let mut decks = cards::Decks::default();
-        let live = cards::reconcile(
-            &mut cards,
-            &mut scratch,
-            &mut decks,
-            &shared.store.groups(),
-            &Theme::light(),
-            0.0,
-        );
-        assert_eq!(live, 1);
-        assert_eq!(cards[0].id, id);
-        assert!(cards[0].needs_measure(), "a fresh card was never measured");
     }
 
     /// A launcher that records what it was asked to start.

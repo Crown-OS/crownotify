@@ -1,27 +1,31 @@
-//! The presentation layer: tokens, animation state, hit testing and the
-//! widgets the cards are assembled from.
+//! The presentation layer: two crownui windows over the daemon's snapshots.
 //!
-//! Nothing here reads a socket or decides policy. A card is handed an [`Entry`]
-//! and a [`Theme`] and paints it; what it produces from a click is a
-//! [`CardAction`], which names an intent in the UI's own vocabulary and not a
-//! transport type. The surface layer is what turns that intent back into a
-//! store mutation or a phone command, which is what keeps `ui` testable with
-//! neither a compositor nor a bus.
-//!
-//! [`Entry`]: crate::store::Entry
+//! Nothing here reads a socket or decides policy. A window is handed
+//! [`Snapshot`](crate::daemon::Snapshot)s and draws them; what it produces from
+//! a click is a [`Request`](crate::daemon::Request) naming an intent, which the
+//! core turns into a store mutation or a phone command.
 
-pub mod animation;
+pub mod action;
+pub mod board;
 pub mod card;
+pub mod center;
 pub mod deck;
-pub mod hit;
-pub mod layout;
+pub mod env;
+pub mod feed;
+pub mod head;
+pub mod motion;
+pub mod popup;
+pub mod stack;
 pub mod theme;
+pub mod tile;
 pub mod widget;
+pub mod window;
 
-pub use animation::{CardAnimation, Phase};
-pub use card::{Card, MeasureCtx, RenderCtx, relative_time, resolve_hit, write_relative_time};
+pub use action::{CardAction, MediaAction};
+pub use board::{BoardHandle, Frame, Side};
+pub use card::relative_time;
 pub use deck::{Deck, Pose};
-pub use hit::{CardAction, HitMap, HitRegion, MediaAction};
-pub use layout::{Placement, Stack, card_left, card_width};
+pub use motion::{CardMotion, Phase};
+pub use stack::{Placement, Stack, card_left, card_width};
 pub use theme::{Appearance, Metrics, Palette, Theme, Typography};
-pub use widget::{FieldEvent, TextField};
+pub use window::Window;

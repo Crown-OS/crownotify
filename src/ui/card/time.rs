@@ -1,11 +1,4 @@
 //! Relative timestamps, as a card wears them.
-//!
-//! Written into a caller-owned `String` rather than returned, because the
-//! surface re-renders every visible card's timestamp twice a second and a
-//! freshly allocated `String` per card per tick is exactly the kind of cost the
-//! retained text layouts exist to avoid.
-
-use std::fmt::Write as _;
 
 use chrono::{DateTime, Local};
 
@@ -21,32 +14,48 @@ use chrono::{DateTime, Local};
 /// * earlier today — `9:41 AM`
 /// * the previous calendar day — `Yesterday`
 /// * older — `3 Aug`
-pub fn write_relative_time(out: &mut String, now: DateTime<Local>, then: DateTime<Local>) {
-    out.clear();
+pub fn relative_time(now: DateTime<Local>, then: DateTime<Local>) -> String {
     let seconds = now.signed_duration_since(then).num_seconds();
     if seconds < 60 {
-        out.push_str("now");
-        return;
+        return "now".to_string();
     }
     if seconds < 3600 {
-        let _ = write!(out, "{}m", seconds / 60);
-        return;
+        return format!("{}m", seconds / 60);
     }
-
     let (today, that_day) = (now.date_naive(), then.date_naive());
     if today == that_day {
-        let _ = write!(out, "{}", then.format("%-I:%M %p"));
+        then.format("%-I:%M %p").to_string()
     } else if today.pred_opt() == Some(that_day) {
-        out.push_str("Yesterday");
+        "Yesterday".to_string()
     } else {
-        let _ = write!(out, "{}", then.format("%-d %b"));
+        then.format("%-d %b").to_string()
     }
 }
 
-/// [`write_relative_time`] into a fresh string. Convenience for tests and for
-/// the rare caller that is not on the frame path.
-pub fn relative_time(now: DateTime<Local>, then: DateTime<Local>) -> String {
-    let mut out = String::new();
-    write_relative_time(&mut out, now, then);
-    out
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone};
+
+    use super::*;
+
+    #[test]
+    fn relative_timestamps_step_through_every_boundary() {
+        let Some(now) = Local.with_ymd_and_hms(2025, 8, 9, 21, 30, 0).single() else {
+            panic!("an unambiguous local time");
+        };
+        assert_eq!(relative_time(now, now), "now");
+        assert_eq!(relative_time(now, now - Duration::seconds(59)), "now");
+        assert_eq!(relative_time(now, now - Duration::seconds(60)), "1m");
+        assert_eq!(relative_time(now, now - Duration::minutes(5)), "5m");
+        assert_eq!(relative_time(now, now - Duration::minutes(59)), "59m");
+        assert_eq!(relative_time(now, now - Duration::hours(12)), "9:30 AM");
+        assert_eq!(relative_time(now, now - Duration::days(1)), "Yesterday");
+        assert_eq!(relative_time(now, now - Duration::days(5)), "4 Aug");
+    }
+
+    #[test]
+    fn a_timestamp_from_the_future_reads_as_now() {
+        let now = Local::now();
+        assert_eq!(relative_time(now, now + Duration::minutes(3)), "now");
+    }
 }

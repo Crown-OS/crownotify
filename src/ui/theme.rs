@@ -9,11 +9,11 @@
 //! The target is the macOS Tahoe notification: a heavily translucent, blurred,
 //! rounded card floating over the wallpaper. The card fill is therefore *not*
 //! opaque — it is meant to sit on top of the compositor's backdrop blur (see
-//! `WindowConfig::blur`). It is opaque enough, though, to stay readable on a
-//! compositor with no `ext-background-effect`, where the blur silently does
-//! nothing and the fill is all that stands between the text and the wallpaper.
+//! [`Theme::material`]). It is opaque enough, though, to stay readable on a
+//! compositor with no background effect, where crownui falls back to an in-app
+//! blur and the fill is most of what stands between the text and the wallpaper.
 
-use crownshell::{Blur, INTER, MaterialSpec, Shadow, TextStyle, kurbo::Vec2, peniko::Color};
+use crownui::prelude::{Color, Material, MaterialBlur, MaterialShadow, Styled, Vector, WHITE};
 
 use crate::config::AppearancePreference;
 
@@ -46,14 +46,11 @@ impl From<AppearancePreference> for Appearance {
     }
 }
 
-/// Every token the UI draws with, for one appearance.
-///
-/// Cheap to clone but not free — it owns a family string per text style — so
-/// build it once and share it through `surface::Shared` rather than per frame.
-#[derive(Debug, Clone, PartialEq)]
+/// Every token the UI draws with, for one appearance. `Copy`, so a view
+/// closure takes it by value.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
-    /// What the compositor is asked to render behind and around a card.
-    pub material: Material,
+    pub glass: Glass,
     pub palette: Palette,
     pub metrics: Metrics,
     pub text: Typography,
@@ -65,7 +62,7 @@ impl Theme {
         Self {
             text: Typography::new(&palette),
             metrics: Metrics::default(),
-            material: Material::light(),
+            glass: Glass::light(),
             palette,
         }
     }
@@ -75,7 +72,7 @@ impl Theme {
         Self {
             text: Typography::new(&palette),
             metrics: Metrics::default(),
-            material: Material::dark(),
+            glass: Glass::dark(),
             palette,
         }
     }
@@ -86,26 +83,23 @@ impl Theme {
             Appearance::Dark => Self::dark(),
         }
     }
-}
 
-impl Theme {
-    /// What the compositor is asked to render for a card's shapes.
-    ///
-    /// Built fresh rather than stored because it is a handful of `f64`s and
-    /// building it keeps [`Material`] the single place the numbers live.
-    pub fn material_spec(&self) -> MaterialSpec {
-        MaterialSpec {
-            blur: Some(Blur {
-                radius: self.material.blur_radius,
-                tint: self.material.tint,
-                saturation: self.material.saturation,
+    /// What the compositor is asked to render behind and around a card.
+    pub fn material(&self) -> Material {
+        let glass = &self.glass;
+        Material {
+            corner_radius: self.metrics.card_radius,
+            border_width: glass.border,
+            blur: Some(MaterialBlur {
+                radius: glass.blur_radius,
+                tint: glass.tint,
+                saturation: glass.saturation,
             }),
-            shadow: Some(Shadow {
-                radius: self.material.shadow_radius,
-                offset: Vec2::new(0.0, self.material.shadow_dy),
-                color: self.material.shadow_color,
+            shadow: Some(MaterialShadow {
+                radius: glass.shadow_radius,
+                offset: Vector::new(0.0, glass.shadow_dy),
+                color: glass.shadow_color,
             }),
-            border: self.material.border,
         }
     }
 }
@@ -120,28 +114,26 @@ impl Default for Theme {
 ///
 /// These are not paint: they cross the wire to `crownpositor`, which evaluates
 /// the card's rounded rectangle as a signed distance field and blurs, tints,
-/// rims and shadows it in one fragment shader pass. What the daemon still
-/// paints for itself is whatever the compositor says it will not do — see
-/// [`Palette::card`].
+/// rims and shadows it in one fragment shader pass.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Material {
+pub struct Glass {
     /// Backdrop blur radius in logical pixels.
-    pub blur_radius: f64,
+    pub blur_radius: f32,
     /// Mixed over the blurred backdrop. Its alpha is how much of it shows, so
     /// this is far more transparent than [`Palette::card`], which has to stand
     /// in for the whole material when there is no blur behind it.
     pub tint: Color,
     /// Chroma multiplier about luma. Above `1.0` is the vibrancy that makes a
     /// colour show through frosted glass.
-    pub saturation: f64,
+    pub saturation: f32,
     /// Width of the refractive rim, in logical pixels.
-    pub border: f64,
-    pub shadow_radius: f64,
-    pub shadow_dy: f64,
+    pub border: f32,
+    pub shadow_radius: f32,
+    pub shadow_dy: f32,
     pub shadow_color: Color,
 }
 
-impl Material {
+impl Glass {
     pub fn light() -> Self {
         Self {
             blur_radius: 32.0,
@@ -165,9 +157,9 @@ impl Material {
     }
 }
 
-/// Colours, all premultiplied by nothing — alpha is meaningful and is what
-/// makes the card material work, so widgets must fade by *multiplying* alpha
-/// (see `widget::surface::multiply_alpha`) rather than by replacing it.
+/// Colours with meaningful alpha: it is what makes the card material work, so
+/// widgets fade by multiplying alpha (`Color::with_alpha_factor`) rather than by
+/// replacing it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     /// Card fill. Translucent: the compositor's blur is the other half of it.
@@ -192,6 +184,8 @@ pub struct Palette {
     pub field: Color,
     pub field_rim: Color,
     pub separator: Color,
+    /// Glyphs on a filled button.
+    pub on_fill: Color,
 }
 
 impl Palette {
@@ -209,6 +203,7 @@ impl Palette {
             field: Color::from_rgba8(255, 255, 255, 179),
             field_rim: Color::from_rgba8(0, 0, 0, 26),
             separator: Color::from_rgba8(0, 0, 0, 20),
+            on_fill: WHITE,
         }
     }
 
@@ -229,6 +224,7 @@ impl Palette {
             field: Color::from_rgba8(255, 255, 255, 26),
             field_rim: Color::from_rgba8(255, 255, 255, 36),
             separator: Color::from_rgba8(255, 255, 255, 31),
+            on_fill: WHITE,
         }
     }
 }
@@ -236,35 +232,30 @@ impl Palette {
 /// Sizes and spacing, in logical pixels.
 ///
 /// Shared by both appearances: a light/dark switch must never re-flow the
-/// stack, because the surface would then have to re-measure every card to
-/// change a colour.
+/// stack.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Metrics {
-    pub card_width: f64,
-    pub card_radius: f64,
+    pub card_width: f32,
+    pub card_radius: f32,
     /// Vertical gap between two cards in the stack.
-    pub card_gap: f64,
+    pub card_gap: f32,
     /// How far one card of a collapsed deck peeks out below the card in front.
-    pub deck_peek: f64,
+    pub deck_peek: f32,
     /// How much narrower each card of a collapsed deck is than the one in
     /// front of it, per side.
-    pub deck_inset: f64,
+    pub deck_inset: f32,
     /// Gap between the card and the edge of the output.
-    pub card_margin: f64,
-    pub pad_x: f64,
-    pub pad_y: f64,
+    pub card_margin: f32,
+    pub pad_x: f32,
+    pub pad_y: f32,
     /// Side of the square app icon.
-    pub icon: f64,
-    pub icon_radius: f64,
+    pub icon: f32,
+    pub icon_radius: f32,
     /// Gap between the icon column and the text column.
-    pub icon_gap: f64,
-    pub shadow_dy: f64,
-    /// Shadow softness as a CSS-style blur radius. Vello wants a Gaussian
-    /// standard deviation, which is half of this; `widget::surface` converts.
-    pub shadow_blur: f64,
+    pub icon_gap: f32,
     /// Height of a pill button and diameter of a circular icon button.
-    pub button: f64,
-    pub field_height: f64,
+    pub button: f32,
+    pub field_height: f32,
 }
 
 impl Default for Metrics {
@@ -281,54 +272,99 @@ impl Default for Metrics {
             icon: 38.0,
             icon_radius: 9.0,
             icon_gap: 12.0,
-            shadow_dy: 6.0,
-            shadow_blur: 18.0,
             button: 32.0,
             field_height: 30.0,
         }
     }
 }
 
+/// One text role: what a run of text is drawn with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextRole {
+    pub size: f32,
+    pub weight: u16,
+    pub color: Color,
+    /// As a multiple of the size; `None` is the font's own.
+    pub line_height: Option<f32>,
+    pub tracking: f32,
+}
+
+impl TextRole {
+    const BASE: Self = Self {
+        size: 13.0,
+        weight: 400,
+        color: WHITE,
+        line_height: None,
+        tracking: 0.0,
+    };
+
+    /// Styles `view` with this role.
+    pub fn apply<S: Styled>(self, view: S) -> S {
+        let view = view
+            .text_size(self.size)
+            .font_weight(self.weight)
+            .text_color(self.color)
+            .tracking(self.tracking);
+        match self.line_height {
+            Some(line_height) => view.leading(line_height),
+            None => view,
+        }
+    }
+}
+
 /// The six text roles a card uses, already carrying their colour.
-///
-/// Handing widgets a finished [`TextStyle`] rather than a size and a weight
-/// means `Text::set_style` can compare it against what it already has and skip
-/// the re-layout, which is the whole reason cards retain their `Text`s.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Typography {
     /// App name.
-    pub app: TextStyle,
-    pub summary: TextStyle,
-    /// Body copy. Wrapped and clamped to four lines by the card, not here.
-    pub body: TextStyle,
+    pub app: TextRole,
+    pub summary: TextRole,
+    /// Body copy. Wrapped and clamped by the card, not here.
+    pub body: TextRole,
     /// The uppercase "TIME SENSITIVE" label a critical notification carries.
-    pub eyebrow: TextStyle,
+    pub eyebrow: TextRole,
     /// Timestamps and other small print.
-    pub meta: TextStyle,
+    pub meta: TextRole,
     /// Text typed into an inline reply.
-    pub field: TextStyle,
+    pub field: TextRole,
 }
 
 impl Typography {
     /// Builds the roles against `palette`, so the colours cannot drift from the
     /// appearance the rest of the theme was built for.
     pub fn new(palette: &Palette) -> Self {
-        let base = TextStyle::new(INTER, 13.0);
+        let base = TextRole::BASE;
         Self {
-            app: base.clone().with_weight(600.0).with_color(palette.primary),
-            summary: base.clone().with_weight(600.0).with_color(palette.primary),
-            body: base
-                .clone()
-                .with_color(palette.secondary)
-                .with_line_height(1.35),
-            eyebrow: base
-                .clone()
-                .with_size(11.0)
-                .with_weight(600.0)
-                .with_letter_spacing(0.6)
-                .with_color(palette.tertiary),
-            meta: base.clone().with_size(11.0).with_color(palette.tertiary),
-            field: base.with_color(palette.primary),
+            app: TextRole {
+                weight: 600,
+                color: palette.primary,
+                ..base
+            },
+            summary: TextRole {
+                weight: 600,
+                color: palette.primary,
+                ..base
+            },
+            body: TextRole {
+                color: palette.secondary,
+                line_height: Some(1.35),
+                ..base
+            },
+            eyebrow: TextRole {
+                size: 11.0,
+                weight: 600,
+                tracking: 0.6,
+                color: palette.tertiary,
+                ..base
+            },
+            meta: TextRole {
+                size: 11.0,
+                color: palette.tertiary,
+                ..base
+            },
+            field: TextRole {
+                color: palette.primary,
+                ..base
+            },
         }
     }
 }
@@ -340,12 +376,7 @@ mod tests {
     /// Rough perceived brightness of a colour, ignoring alpha. Good enough to
     /// assert that one theme is the light one.
     fn luminance(color: Color) -> f32 {
-        let [r, g, b, _] = color.components;
-        0.2126 * r + 0.7152 * g + 0.0722 * b
-    }
-
-    fn alpha(color: Color) -> f32 {
-        color.components[3]
+        0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
     }
 
     #[test]
@@ -353,18 +384,8 @@ mod tests {
         let light = Theme::light();
         let dark = Theme::dark();
 
-        assert!(
-            luminance(light.palette.card) > luminance(dark.palette.card),
-            "light card {} is not brighter than the dark card {}",
-            luminance(light.palette.card),
-            luminance(dark.palette.card)
-        );
-        assert!(
-            luminance(light.palette.primary) < luminance(dark.palette.primary),
-            "light primary text {} is not darker than the dark one {}",
-            luminance(light.palette.primary),
-            luminance(dark.palette.primary)
-        );
+        assert!(luminance(light.palette.card) > luminance(dark.palette.card));
+        assert!(luminance(light.palette.primary) < luminance(dark.palette.primary));
         assert!(
             luminance(light.palette.card) > luminance(light.palette.primary),
             "light text would be invisible on its own card"
@@ -380,7 +401,7 @@ mod tests {
     #[test]
     fn both_cards_stay_translucent_enough_for_the_backdrop_blur() {
         for theme in [Theme::light(), Theme::dark()] {
-            let card = alpha(theme.palette.card);
+            let card = theme.palette.card.a;
             assert!(
                 (0.5..0.85).contains(&card),
                 "card alpha {card} is outside the translucent range"
@@ -392,18 +413,8 @@ mod tests {
     fn text_roles_fade_from_primary_to_tertiary() {
         for theme in [Theme::light(), Theme::dark()] {
             let palette = &theme.palette;
-            assert!(
-                alpha(palette.primary) > alpha(palette.secondary),
-                "secondary text is not softer than primary: {} vs {}",
-                alpha(palette.secondary),
-                alpha(palette.primary)
-            );
-            assert!(
-                alpha(palette.secondary) > alpha(palette.tertiary),
-                "tertiary text is not softer than secondary: {} vs {}",
-                alpha(palette.tertiary),
-                alpha(palette.secondary)
-            );
+            assert!(palette.primary.a > palette.secondary.a);
+            assert!(palette.secondary.a > palette.tertiary.a);
         }
     }
 
@@ -414,26 +425,29 @@ mod tests {
         assert_eq!(dark.text.body.color, dark.palette.secondary);
         assert_eq!(dark.text.meta.color, dark.palette.tertiary);
         assert_eq!(dark.text.field.color, dark.palette.primary);
-        assert_eq!(dark.text.app.family, INTER);
     }
 
     #[test]
     fn the_eyebrow_is_smaller_and_wider_tracked_than_body_copy() {
         let theme = Theme::light();
         assert!(theme.text.eyebrow.size < theme.text.body.size);
-        assert!(
-            theme.text.eyebrow.letter_spacing > theme.text.body.letter_spacing,
-            "the eyebrow needs the extra tracking to read as a label"
-        );
+        assert!(theme.text.eyebrow.tracking > theme.text.body.tracking);
     }
 
-    /// A light/dark switch must not re-flow the stack; the surface layer relies
-    /// on that to avoid re-measuring every card when only a colour changed.
+    /// A light/dark switch must not re-flow the stack.
     #[test]
     fn both_appearances_share_one_set_of_metrics() {
         assert_eq!(Theme::light().metrics, Theme::dark().metrics);
         assert_eq!(Theme::light().metrics.card_width, 376.0);
         assert_eq!(Theme::light().metrics.card_radius, 18.0);
+    }
+
+    #[test]
+    fn the_material_follows_the_card_shape_and_the_glass_tokens() {
+        let theme = Theme::dark();
+        let material = theme.material();
+        assert_eq!(material.corner_radius, theme.metrics.card_radius);
+        assert_eq!(material.blur.map(|blur| blur.tint), Some(theme.glass.tint));
     }
 
     #[test]
@@ -450,10 +464,6 @@ mod tests {
             Appearance::from(AppearancePreference::Auto),
             Appearance::Light,
             "auto resolves to light until CrownOS has an appearance daemon"
-        );
-        assert_eq!(
-            Theme::for_appearance(Appearance::Dark).palette,
-            Theme::dark().palette
         );
         assert_eq!(Theme::default().palette, Theme::light().palette);
     }

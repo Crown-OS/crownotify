@@ -7,7 +7,7 @@
 //! it into the remote control the user expects, and the brand green is what
 //! makes it recognisable at a glance in a stack of otherwise identical cards.
 
-use crownshell::peniko::Color;
+use crownui::prelude::Color;
 
 use crate::profile::{AppProfile, ContentHint};
 

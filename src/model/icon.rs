@@ -20,7 +20,7 @@ pub enum Icon {
     Data(Arc<ImageData>),
 }
 
-/// Premultiplied RGBA8, row-major, no padding.
+/// Straight-alpha RGBA8, row-major, no padding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageData {
     pub width: u32,
@@ -44,7 +44,7 @@ impl ImageData {
     /// * the pixels may be 3-channel RGB, which is expanded to opaque RGBA
     ///   here so that every consumer sees one layout;
     /// * the alpha is straight, not premultiplied, which is what the renderer
-    ///   wants, so it is premultiplied on the way through.
+    ///   wants, so it is passed through as it is.
     ///
     /// Every field comes from another process. Geometry that does not describe
     /// the buffer it arrived with is reported as [`Error::IconDecode`]; nothing
@@ -108,12 +108,9 @@ impl ImageData {
         if channels == 4 && stride == packed {
             let mut rgba = data;
             rgba.truncate(packed * height);
-            for pixel in rgba.chunks_exact_mut(4) {
-                if opaque {
-                    pixel[3] = u8::MAX;
-                } else {
-                    premultiply(pixel);
-                }
+            if opaque {
+                rgba.chunks_exact_mut(4)
+                    .for_each(|pixel| pixel[3] = u8::MAX);
             }
             return Ok(Self {
                 width: width as u32,
@@ -127,9 +124,7 @@ impl ImageData {
             let start = row * stride;
             for source in data[start..start + packed].chunks_exact(channels) {
                 let alpha = if opaque { u8::MAX } else { source[3] };
-                let mut pixel = [source[0], source[1], source[2], alpha];
-                premultiply(&mut pixel);
-                rgba.extend_from_slice(&pixel);
+                rgba.extend_from_slice(&[source[0], source[1], source[2], alpha]);
             }
         }
 
@@ -138,17 +133,6 @@ impl ImageData {
             height: height as u32,
             rgba,
         })
-    }
-}
-
-/// Scales a straight-alpha RGBA pixel into premultiplied form in place.
-///
-/// The `+ 127` is what makes the round trip exact for opaque pixels: without
-/// it, `a == 255` would darken every colour by one step per decode.
-fn premultiply(pixel: &mut [u8]) {
-    let alpha = u16::from(pixel[3]);
-    for channel in &mut pixel[..3] {
-        *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
     }
 }
 
@@ -200,22 +184,15 @@ mod tests {
     }
 
     #[test]
-    fn straight_alpha_is_premultiplied() {
+    fn straight_alpha_reaches_the_renderer_unscaled() {
         let image =
             ImageData::from_hint(1, 1, 4, true, 8, 4, vec![255, 128, 0, 128]).expect("decodes");
 
         assert_eq!(
             image.rgba,
-            vec![128, 64, 0, 128],
-            "colour channels should be scaled by the alpha"
+            vec![255, 128, 0, 128],
+            "colour channels must not be scaled by the alpha"
         );
-    }
-
-    #[test]
-    fn a_fully_transparent_pixel_premultiplies_to_black() {
-        let image =
-            ImageData::from_hint(1, 1, 4, true, 8, 4, vec![255, 255, 255, 0]).expect("decodes");
-        assert_eq!(image.rgba, vec![0, 0, 0, 0]);
     }
 
     #[test]
