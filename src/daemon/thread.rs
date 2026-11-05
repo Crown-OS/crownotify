@@ -173,7 +173,7 @@ fn build(
 /// for; the D-Bus side quietly drops the two events the freedesktop interface
 /// has no signal for.
 fn publish(service: &CalloopService, outgoing: &OutgoingSender, event: Outgoing) {
-    if let Err(error) = emit(service, &event) {
+    if let Err(error) = broadcast(service, &event) {
         log::warn!("broadcasting {event:?} over crownos-ipc failed: {error}");
     }
     if let Err(error) = outgoing.try_send(event) {
@@ -182,7 +182,11 @@ fn publish(service: &CalloopService, outgoing: &OutgoingSender, event: Outgoing)
 }
 
 /// Broadcasts `event` to the crownos-ipc subscribers.
-fn emit(service: &CalloopService, event: &Outgoing) -> Result<(), crownos_ipc::Error> {
+///
+/// Never from inside the service's own `dispatch`, which `CalloopService`
+/// forbids: the core calls it from its wake source, after the request that
+/// produced the event has returned.
+pub fn broadcast(service: &CalloopService, event: &Outgoing) -> Result<(), crownos_ipc::Error> {
     match event {
         Outgoing::Closed(id, reason) => service.emit(&proto::NotificationClosed {
             id: *id,

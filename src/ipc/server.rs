@@ -29,6 +29,8 @@ use crate::{
 
 /// The de-facto action key that makes a card grow a reply field.
 const INLINE_REPLY_KEY: &str = "inline-reply";
+/// A percentage past this is not a position or a completion anyone can draw.
+const MAX_PERCENT: u8 = 100;
 
 /// Adapter implementing the generated `crownotify::Handler` over any sink.
 pub struct NotifyHandler<S: NotificationSink> {
@@ -189,7 +191,7 @@ impl<S: NotificationSink> crownotify::Handler for NotifyHandler<S> {
         song_name: String,
         percentage: u8,
     ) -> Result<NotificationId, RemoteError> {
-        if percentage > 100 {
+        if percentage > MAX_PERCENT {
             return Err(RemoteError::handler(
                 "percentage is a position in the track, 0-100",
             ));
@@ -289,6 +291,38 @@ impl<S: NotificationSink> crownotify::Handler for NotifyHandler<S> {
                 )),
         ))
     }
+
+    fn send_progress_notification(
+        &mut self,
+        replaces_id: u32,
+        app_name: String,
+        icon: String,
+        summary: String,
+        body: String,
+        percent: Option<u8>,
+        actions: Vec<String>,
+    ) -> Result<NotificationId, RemoteError> {
+        if percent.is_some_and(|percent| percent > MAX_PERCENT) {
+            return Err(RemoteError::handler(
+                "percent is how much of the work is done, 0-100",
+            ));
+        }
+        let mut builder = Notification::builder(app_name)
+            .id(replaces_id)
+            .summary(summary)
+            .body(body.clone())
+            .timeout(Timeout::Never)
+            .resident(true)
+            .actions(Action::from_spec_pairs(&actions))
+            .content(Content::Progress(Progress {
+                label: body,
+                percent,
+            }));
+        if let Some(icon) = parse_icon(&icon) {
+            builder = builder.icon(icon);
+        }
+        Ok(self.post(builder))
+    }
 }
 
 impl<S: NotificationSink> NotifyHandler<S> {
@@ -363,7 +397,7 @@ fn content_for_kind(kind: &str) -> Option<Content> {
         })),
         "progress" => Some(Content::Progress(Progress {
             label: String::new(),
-            percent: 0,
+            percent: None,
         })),
         _ => None,
     }
@@ -390,7 +424,7 @@ fn parse_timestamp(raw: &str) -> DateTime<Local> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::ActionKind;
+    use crate::model::{ActionKind, Icon};
     use crate::proto::protocol::Handler;
 
     /// Records what a transport did, which is all the sink contract promises.
@@ -704,5 +738,86 @@ mod tests {
         assert_eq!(sink.do_not_disturb, vec![true]);
         assert_eq!(sink.dismissed_all, 1);
         assert_eq!(sink.invoked, vec![(7, "archive".to_string())]);
+    }
+
+    fn progress(handler: &mut NotifyHandler<Recorder>, replaces_id: u32, percent: Option<u8>) {
+        handler
+            .send_progress_notification(
+                replaces_id,
+                "Android apps".into(),
+                "/usr/share/icons/android.svg".into(),
+                "Setting up Android apps".into(),
+                "Downloading the system image".into(),
+                percent,
+                vec!["retry".into(), "Try again".into()],
+            )
+            .expect("a progress notification is never refused for its content");
+    }
+
+    #[test]
+    fn a_progress_notification_without_a_percentage_is_an_indeterminate_spinner() {
+        let mut handler = handler();
+        progress(&mut handler, 0, None);
+
+        let posted = &handler.sink().posted[0];
+        let Content::Progress(payload) = &posted.content else {
+            panic!("expected a progress card, got {:?}", posted.content);
+        };
+        assert_eq!(payload.percent, None, "None is the spinner");
+        assert_eq!(posted.summary, "Setting up Android apps");
+        assert_eq!(posted.body, "Downloading the system image");
+        assert_eq!(
+            posted.app.icon,
+            Some(Icon::Path("/usr/share/icons/android.svg".into()))
+        );
+    }
+
+    #[test]
+    fn a_progress_notification_is_resident_never_expires_and_takes_labelled_actions() {
+        let mut handler = handler();
+        progress(&mut handler, 0, Some(40));
+
+        let posted = &handler.sink().posted[0];
+        assert!(posted.resident, "an action must not take the loader down");
+        assert_eq!(posted.timeout, Timeout::Never);
+        assert_eq!(posted.id, 0, "0 asks the sink to allocate");
+        assert_eq!(
+            posted.actions,
+            vec![Action {
+                key: "retry".into(),
+                label: "Try again".into(),
+                kind: ActionKind::Button,
+            }],
+            "actions are id, label pairs, unlike the other IPC methods"
+        );
+        let Content::Progress(payload) = &posted.content else {
+            panic!("expected a progress card");
+        };
+        assert_eq!(payload.percent, Some(40));
+    }
+
+    #[test]
+    fn a_progress_update_is_filed_under_the_id_it_replaces() {
+        let mut handler = handler();
+        progress(&mut handler, 42, Some(80));
+        assert_eq!(handler.sink().posted[0].id, 42);
+    }
+
+    #[test]
+    fn a_completion_past_one_hundred_percent_is_refused() {
+        let mut handler = handler();
+        let error = handler
+            .send_progress_notification(
+                0,
+                "Android apps".into(),
+                String::new(),
+                String::new(),
+                String::new(),
+                Some(101),
+                vec![],
+            )
+            .expect_err("101% done is not a state anything can be in");
+        assert!(format!("{error:?}").contains("0-100"), "got {error:?}");
+        assert!(handler.sink().posted.is_empty());
     }
 }

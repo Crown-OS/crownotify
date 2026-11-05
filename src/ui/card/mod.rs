@@ -163,7 +163,7 @@ mod tests {
         let progress = Notification::builder("Files")
             .content(Content::Progress(crate::model::Progress {
                 label: "Copying".into(),
-                percent: 40,
+                percent: Some(40),
             }))
             .build();
         assert_eq!(view_kind(&progress), ContentHint::General);

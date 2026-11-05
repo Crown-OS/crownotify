@@ -165,7 +165,7 @@ fn body(notification: &Notification) -> &str {
 
 fn progress(notification: &Notification) -> Option<u8> {
     match &notification.content {
-        Content::Progress(progress) => Some(progress.percent),
+        Content::Progress(progress) => progress.percent,
         _ => None,
     }
 }

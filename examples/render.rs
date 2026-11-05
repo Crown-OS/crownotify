@@ -153,7 +153,7 @@ fn samples() -> Vec<Notification> {
             .summary("Copying photos")
             .content(Content::Progress(Progress {
                 label: "312 of 840 items".into(),
-                percent: 37,
+                percent: Some(37),
             }))
             .build(),
         Notification::builder("Mail")

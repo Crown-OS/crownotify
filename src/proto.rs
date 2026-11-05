@@ -71,6 +71,22 @@ crownos_ipc::protocol! {
             expire_timeout: u32,
             actions: Vec<String>,
         ) -> u32;
+        /// Post or update a progress notification. `replaces_id` 0 posts a new
+        /// one; any other id updates that notification in place. `percent:
+        /// None` shows a spinner, `Some` a bar. `icon` is an icon name or an
+        /// absolute path, and `actions` are id, label pairs as in freedesktop
+        /// `Notify`. The notification is resident: it never expires, invoking
+        /// one of its actions leaves it up, and it goes only when replaced
+        /// away or closed with `close_notification`.
+        fn send_progress_notification(
+            replaces_id: u32,
+            app_name: String,
+            icon: String,
+            summary: String,
+            body: String,
+            percent: Option<u8>,
+            actions: Vec<String>,
+        ) -> u32;
 
         /// A notification left the screen (reason: 1 = expired, 2 = dismissed
         /// by the user, 3 = closed by `close_notification`).

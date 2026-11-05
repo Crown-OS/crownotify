@@ -135,16 +135,23 @@ impl Store {
     /// A notification whose id is only in history is re-posted as a fresh
     /// toast under the same id, and the stale history copy is dropped so that
     /// no id is ever filed twice.
+    ///
+    /// A resident replacement is the exception: a loader that reports every
+    /// percent is updated wherever it is, in the center included, and the
+    /// focus mode in force never judges it again. The user decides once
+    /// whether it is on screen, and Do Not Disturb never suppresses its updates.
     pub fn post(&mut self, mut notification: Notification) -> NotificationId {
         if notification.id == 0 {
             notification.id = self.next_id();
         }
         let id = notification.id;
+        let resident = notification.resident;
 
         if let Some(entry) = self
             .toasts
             .iter_mut()
             .chain(self.held.iter_mut())
+            .chain(self.history.iter_mut().filter(|_| resident))
             .find(|entry| entry.notification.id == id)
         {
             entry.notification = notification;
@@ -254,6 +261,10 @@ impl Store {
     /// The entry drops into history unless it was `transient`. An id that is
     /// only in history is removed from it instead, which is what a per-card
     /// close button in the notification center does.
+    ///
+    /// A resident notification its sender closes is withdrawn instead of
+    /// filed: it lives until the sender removes it, and a loader left behind
+    /// in the center would spin forever.
     pub fn close(&mut self, id: NotificationId, reason: CloseReason) -> bool {
         log::debug!("closing notification {id} ({reason:?})");
 
@@ -263,7 +274,10 @@ impl Store {
             .position(|entry| entry.notification.id == id)
             && let Some(entry) = self.toasts.remove(index)
         {
-            self.retain(entry);
+            let withdrawn = reason == CloseReason::Closed && entry.notification.resident;
+            if !withdrawn {
+                self.retain(entry);
+            }
             return true;
         }
 
@@ -662,6 +676,91 @@ mod tests {
             history_ids(&store).is_empty(),
             "the stale history copy should have been dropped, got {:?}",
             history_ids(&store)
+        );
+    }
+
+    fn loader(id: NotificationId, summary: &str) -> Notification {
+        Notification::builder("Android apps")
+            .id(id)
+            .summary(summary)
+            .resident(true)
+            .timeout(Timeout::Never)
+            .build()
+    }
+
+    fn summary_of(store: &Store, id: NotificationId) -> Option<&str> {
+        store
+            .get(id)
+            .map(|entry| entry.notification.summary.as_str())
+    }
+
+    #[test]
+    fn a_resident_update_keeps_its_place_on_screen_under_do_not_disturb() {
+        let mut store = store();
+        let id = store.post(loader(0, "10%"));
+        let other = store.post(notification("Mail", "two"));
+        store.set_do_not_disturb(true);
+
+        store.post(loader(id, "20%"));
+
+        assert_eq!(
+            toast_ids(&store),
+            vec![id, other],
+            "Do Not Disturb must not take the loader off screen or reorder it"
+        );
+        assert_eq!(summary_of(&store, id), Some("20%"));
+        assert!(history_ids(&store).is_empty());
+    }
+
+    #[test]
+    fn a_resident_notification_dismissed_into_the_center_is_updated_there() {
+        let mut store = store();
+        let id = store.post(loader(0, "10%"));
+        assert!(store.close(id, CloseReason::Dismissed));
+
+        store.post(loader(id, "20%"));
+
+        assert!(
+            toast_ids(&store).is_empty(),
+            "a swiped-away loader must not pop back up on its next percent"
+        );
+        assert_eq!(history_ids(&store), vec![id]);
+        assert_eq!(summary_of(&store, id), Some("20%"));
+    }
+
+    #[test]
+    fn a_resident_notification_filed_by_do_not_disturb_keeps_its_place_in_the_center() {
+        let mut store = store();
+        store.set_do_not_disturb(true);
+        let id = store.post(loader(0, "10%"));
+        let newer = store.post(notification("Mail", "newer"));
+
+        store.post(loader(id, "20%"));
+        store.set_do_not_disturb(false);
+
+        assert_eq!(
+            history_ids(&store),
+            vec![newer, id],
+            "an update is not a new arrival to file at the top"
+        );
+        assert_eq!(summary_of(&store, id), Some("20%"));
+        assert!(toast_ids(&store).is_empty());
+    }
+
+    #[test]
+    fn a_resident_notification_closed_by_its_sender_leaves_nothing_behind() {
+        let mut store = store();
+        let withdrawn = store.post(loader(0, "Setting up"));
+        let dismissed = store.post(loader(0, "Setting up"));
+
+        assert!(store.close(withdrawn, CloseReason::Closed));
+        assert!(store.close(dismissed, CloseReason::Dismissed));
+
+        assert!(store.get(withdrawn).is_none(), "the sender withdrew it");
+        assert_eq!(
+            history_ids(&store),
+            vec![dismissed],
+            "the user only put it away"
         );
     }
 

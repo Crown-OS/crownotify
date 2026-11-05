@@ -556,7 +556,7 @@ fn content_for(
     match percent {
         Some(percent) => Content::Progress(Progress {
             label: summary.to_string(),
-            percent,
+            percent: Some(percent),
         }),
         None => Content::General,
     }
@@ -675,7 +675,11 @@ mod tests {
         else {
             panic!("expected a progress card");
         };
-        assert_eq!(progress.percent, 64);
+        assert_eq!(
+            progress.percent,
+            Some(64),
+            "a value hint is a known completion, never a spinner"
+        );
         assert_eq!(progress.label, "Copying");
     }
 

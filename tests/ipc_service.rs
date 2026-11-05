@@ -21,11 +21,13 @@ use std::{
 
 use crownotify::proto;
 use crownotify::{
+    daemon::{self, Daemon, DaemonState, Snapshot},
     ipc::{NotificationSink, serve_in},
     model::{
-        CloseReason, Content, DeviceKind, Notification, NotificationId, RelayDevice, Timeout,
-        Urgency,
+        CloseReason, Content, DeviceKind, Notification, NotificationId, Progress, RelayDevice,
+        Timeout, Urgency,
     },
+    store::{Store, StoreConfig},
 };
 
 /// Long enough to absorb a loaded CI machine, short enough that a genuine
@@ -461,4 +463,329 @@ fn two_clients_are_served_at_once() {
     service
         .sink
         .read(|recorded| assert_eq!(recorded.posted.len(), 2));
+}
+
+/// The real daemon behind the service, on a worker thread: the store, its
+/// replacement and residency rules, and the events they publish, broadcast the
+/// way the core thread broadcasts them. What the windows would draw is copied
+/// out after every turn of the loop.
+struct LiveDaemon {
+    directory: tempfile::TempDir,
+    snapshot: Arc<Mutex<Snapshot>>,
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl LiveDaemon {
+    fn start() -> Self {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let snapshot = Arc::new(Mutex::new(Snapshot::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let bound = Arc::new(Barrier::new(2));
+
+        let path = directory.path().to_path_buf();
+        let worker = thread::spawn({
+            let snapshot = Arc::clone(&snapshot);
+            let stop = Arc::clone(&stop);
+            let bound = Arc::clone(&bound);
+            move || {
+                let mut event_loop: calloop::EventLoop<'static, ()> =
+                    calloop::EventLoop::try_new().expect("event loop");
+                let (outgoing, _session_bus) = async_channel::unbounded();
+                let mut core = Daemon::new(Store::new(StoreConfig::default()), outgoing);
+                core.set_launcher(Box::new(()));
+                let state = DaemonState::new(core);
+                let service = serve_in(&event_loop.handle(), state.clone(), &path)
+                    .expect("the service binds");
+                bound.wait();
+
+                let mut events = Vec::new();
+                while !stop.load(Ordering::Relaxed) {
+                    event_loop
+                        .dispatch(Duration::from_millis(5), &mut ())
+                        .expect("dispatch");
+                    state.borrow_mut().drain_outgoing(&mut events);
+                    for event in events.drain(..) {
+                        daemon::broadcast(&service, &event)
+                            .expect("the service can always broadcast");
+                    }
+                    *snapshot.lock().expect("snapshot lock") = state.borrow().snapshot();
+                }
+            }
+        });
+        bound.wait();
+
+        Self {
+            directory,
+            snapshot,
+            stop,
+            worker: Some(worker),
+        }
+    }
+
+    fn client(&self) -> proto::Client {
+        let mut client = proto::Client::connect_in(self.directory.path()).expect("connect");
+        client
+            .subscribe_blocking::<proto::ActionInvoked>(TIMEOUT)
+            .expect("subscribe to actions");
+        client
+            .subscribe_blocking::<proto::NotificationClosed>(TIMEOUT)
+            .expect("subscribe to closures");
+        client
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        self.snapshot.lock().expect("snapshot lock").clone()
+    }
+
+    /// Waits until what the windows would draw satisfies `ready`.
+    fn wait_for(&self, what: &str, ready: impl Fn(&Snapshot) -> bool) -> Snapshot {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = self.snapshot();
+            if ready(&snapshot) {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+impl Drop for LiveDaemon {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("the daemon thread exits cleanly");
+        }
+    }
+}
+
+/// Posts or updates the Android setup loader and returns the id it is under.
+fn loader(
+    client: &mut proto::Client,
+    replaces_id: NotificationId,
+    body: &str,
+    percent: Option<u8>,
+    actions: &[&str],
+) -> NotificationId {
+    let pending = client
+        .send_progress_notification(
+            replaces_id,
+            "Android apps".into(),
+            "android".into(),
+            "Setting up Android apps".into(),
+            body.into(),
+            percent,
+            actions.iter().map(|text| (*text).to_string()).collect(),
+        )
+        .expect("request");
+    client.wait(pending, TIMEOUT).expect("reply")
+}
+
+fn percent_of(notification: &Notification) -> Option<u8> {
+    match &notification.content {
+        Content::Progress(progress) => progress.percent,
+        other => panic!("expected a progress card, got {other:?}"),
+    }
+}
+
+/// Every event that has arrived, pumping the client for a moment first.
+fn drain_events(client: &mut proto::Client) -> Vec<proto::Event> {
+    let mut events = Vec::new();
+    let settle = Instant::now() + Duration::from_millis(100);
+    while Instant::now() < settle {
+        let _ = client.handle_readable();
+        events.extend(std::iter::from_fn(|| client.next_event()));
+        thread::sleep(Duration::from_millis(5));
+    }
+    events
+}
+
+#[test]
+fn a_progress_notification_is_posted_as_a_resident_spinner_that_never_expires() {
+    let daemon = LiveDaemon::start();
+    let mut client = daemon.client();
+
+    let id = loader(&mut client, 0, "Preparing", None, &[]);
+    assert_ne!(id, 0, "0 is never a live id");
+
+    let snapshot = daemon.wait_for("the loader on screen", |s| s.toasts.len() == 1);
+    let posted = &snapshot.toasts[0];
+    assert_eq!(posted.id, id);
+    assert_eq!(posted.summary, "Setting up Android apps");
+    assert_eq!(posted.body, "Preparing");
+    assert_eq!(percent_of(posted), None, "no percentage is a spinner");
+    assert!(posted.resident);
+    assert_eq!(posted.timeout, Timeout::Never);
+}
+
+#[test]
+fn a_progress_update_replaces_the_loader_in_place() {
+    let daemon = LiveDaemon::start();
+    let mut client = daemon.client();
+
+    let id = loader(&mut client, 0, "Preparing", None, &[]);
+    let pending = client
+        .send_general_notification("Mail".into(), "Ada".into(), String::new(), 0, vec![])
+        .expect("request");
+    let mail = client.wait(pending, TIMEOUT).expect("reply");
+
+    let updated = loader(&mut client, id, "Downloading", Some(40), &[]);
+    assert_eq!(updated, id, "an update keeps the id it replaces");
+
+    let snapshot = daemon.wait_for("the update", |s| {
+        s.toasts
+            .first()
+            .is_some_and(|loader| percent_of(loader) == Some(40))
+    });
+    let ids: Vec<NotificationId> = snapshot.toasts.iter().map(|n| n.id).collect();
+    assert_eq!(
+        ids,
+        vec![id, mail],
+        "the loader must keep its place and not be duplicated"
+    );
+    assert_eq!(snapshot.toasts[0].body, "Downloading");
+}
+
+#[test]
+fn a_resident_progress_notification_survives_its_own_action() {
+    let daemon = LiveDaemon::start();
+    let mut client = daemon.client();
+
+    let id = loader(
+        &mut client,
+        0,
+        "The download failed",
+        Some(0),
+        &["retry", "Try again"],
+    );
+    daemon.wait_for("the loader on screen", |s| s.toasts.len() == 1);
+    let snapshot = daemon.snapshot();
+    assert_eq!(snapshot.toasts[0].actions[0].label, "Try again");
+
+    client.invoke_action(id, "retry".into()).expect("invoke");
+
+    let mut invoked = None;
+    poll_until(&mut client, "ActionInvoked", |client| {
+        while let Some(event) = client.next_event() {
+            match event {
+                proto::Event::ActionInvoked(event) => invoked = Some(event),
+                proto::Event::NotificationClosed(event) => {
+                    panic!("a resident notification was closed by its action: {event:?}")
+                }
+                _ => {}
+            }
+        }
+        invoked.is_some()
+    });
+    let invoked = invoked.expect("an action event");
+    assert_eq!((invoked.id, invoked.action.as_str()), (id, "retry"));
+
+    let after = drain_events(&mut client);
+    assert!(
+        !after
+            .iter()
+            .any(|event| matches!(event, proto::Event::NotificationClosed(_))),
+        "the action closed the loader after all: {after:?}"
+    );
+    let snapshot = daemon.snapshot();
+    assert_eq!(
+        snapshot.toasts.iter().map(|n| n.id).collect::<Vec<_>>(),
+        vec![id],
+        "the loader must still be on screen"
+    );
+}
+
+#[test]
+fn closing_a_progress_notification_announces_it_and_leaves_nothing_behind() {
+    let daemon = LiveDaemon::start();
+    let mut client = daemon.client();
+
+    let id = loader(&mut client, 0, "Downloading", Some(70), &[]);
+    daemon.wait_for("the loader on screen", |s| s.toasts.len() == 1);
+
+    client.close_notification(id).expect("close");
+
+    let mut closed = None;
+    poll_until(&mut client, "NotificationClosed", |client| {
+        while let Some(event) = client.next_event() {
+            if let proto::Event::NotificationClosed(event) = event {
+                closed = Some(event);
+            }
+        }
+        closed.is_some()
+    });
+    let closed = closed.expect("a closure event");
+    assert_eq!(closed.id, id);
+    assert_eq!(
+        closed.reason,
+        CloseReason::Closed as u8,
+        "reason 3: closed by its sender"
+    );
+
+    let snapshot = daemon.wait_for("the loader to go", |s| s.toasts.is_empty());
+    assert!(
+        snapshot.history.is_empty(),
+        "a withdrawn loader must not linger in the center, got {:?}",
+        snapshot.history
+    );
+}
+
+#[test]
+fn a_progress_percentage_past_one_hundred_is_refused() {
+    let service = Service::start();
+    let mut client = service.client();
+
+    let pending = client
+        .send_progress_notification(
+            0,
+            "Android apps".into(),
+            String::new(),
+            String::new(),
+            String::new(),
+            Some(250),
+            vec![],
+        )
+        .expect("request");
+    let error = client
+        .wait(pending, TIMEOUT)
+        .expect_err("250% done is not a state");
+    assert!(format!("{error}").contains("0-100"), "got {error}");
+    service
+        .sink
+        .read(|recorded| assert!(recorded.posted.is_empty()));
+}
+
+#[test]
+fn the_progress_method_reaches_the_sink_as_a_progress_card() {
+    let service = Service::start();
+    let mut client = service.client();
+
+    let pending = client
+        .send_progress_notification(
+            0,
+            "Android apps".into(),
+            "/usr/share/icons/android.svg".into(),
+            "Setting up Android apps".into(),
+            "Preparing".into(),
+            None,
+            vec!["cancel".into(), "Cancel".into()],
+        )
+        .expect("request");
+    assert_eq!(client.wait(pending, TIMEOUT).expect("reply"), FIRST_ID);
+
+    service.sink.read(|recorded| {
+        let posted = &recorded.posted[0];
+        assert_eq!(
+            posted.content,
+            Content::Progress(Progress {
+                label: "Preparing".into(),
+                percent: None,
+            })
+        );
+        assert!(posted.resident);
+        assert_eq!(posted.actions[0].key, "cancel");
+        assert_eq!(posted.actions[0].label, "Cancel");
+    });
 }

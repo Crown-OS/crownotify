@@ -10,4 +10,4 @@ pub mod thread;
 pub use request::{Request, RequestSender};
 pub use snapshot::Snapshot;
 pub use state::{Daemon, DaemonState, phone_command, reply_command};
-pub use thread::{Core, spawn};
+pub use thread::{Core, broadcast, spawn};

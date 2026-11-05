@@ -57,12 +57,13 @@ pub struct Music {
     pub percent: u8,
 }
 
-/// A long-running operation, drawn as a labelled bar.
+/// A long-running operation, drawn as a labelled bar, or as a spinner while
+/// how far it has got is unknown.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
     pub label: String,
-    /// Completion, 0-100.
-    pub percent: u8,
+    /// Completion, 0-100. `None` while the operation cannot tell.
+    pub percent: Option<u8>,
 }
 
 #[cfg(test)]
@@ -117,8 +118,8 @@ mod tests {
 
         let progress = Progress {
             label: "Copying".into(),
-            percent: 100,
+            percent: Some(100),
         };
-        assert_eq!(progress.clone().percent, 100);
+        assert_eq!(progress.clone().percent, Some(100));
     }
 }

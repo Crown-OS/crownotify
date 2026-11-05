@@ -31,9 +31,11 @@ use std::{
 };
 
 use crownotify::{
+    daemon::Daemon,
     dbus::freedesktop::{self, BUS_NAME, Notifications, OBJECT_PATH},
     ipc::{Incoming, Outgoing},
     model::{CloseReason, Content, DeviceKind, RelayDevice, Timeout, Urgency},
+    store::{Store, StoreConfig},
 };
 use smol::stream::StreamExt;
 use zbus::{
@@ -91,6 +93,9 @@ trait Notify {
 
     #[zbus(signal)]
     fn notification_closed(&self, id: u32, reason: u32) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    fn action_invoked(&self, id: u32, action_key: String) -> zbus::Result<()>;
 }
 
 /// A notification server on a private connection, plus the channel its
@@ -524,5 +529,89 @@ fn serve_claims_the_well_known_notification_name() {
             "{BUS_NAME} should be owned once serve returns"
         );
         drop(served);
+    });
+}
+
+#[test]
+fn a_resident_notification_survives_the_action_it_announces() {
+    if !session_bus_available() {
+        return;
+    }
+    let _guard = bus_test_lock();
+
+    smol::block_on(async {
+        let server = Server::start().await;
+        let proxy = server.proxy().await;
+        let mut invocations = proxy
+            .receive_action_invoked()
+            .await
+            .expect("signal subscription failed");
+
+        let actions = ["retry", "Try again"];
+        let resident = proxy
+            .notify(
+                "Android apps",
+                0,
+                "",
+                "Setting up Android apps",
+                "The download failed",
+                &actions,
+                HashMap::from([("resident", Value::Bool(true)), ("value", Value::I32(0))]),
+                0,
+            )
+            .await
+            .expect("Notify failed");
+        let ordinary = proxy
+            .notify("Mail", 0, "", "Ada", "", &actions, HashMap::new(), 0)
+            .await
+            .expect("Notify failed");
+
+        let (unused, _) = async_channel::unbounded();
+        let mut daemon = Daemon::new(Store::new(StoreConfig::default()), unused);
+        daemon.apply(server.next_incoming());
+        daemon.apply(server.next_incoming());
+        daemon.invoke_action(resident, "retry");
+        daemon.invoke_action(ordinary, "retry");
+
+        let mut published = Vec::new();
+        daemon.drain_outgoing(&mut published);
+        let described: Vec<String> = published.iter().map(|event| format!("{event:?}")).collect();
+        assert_eq!(
+            described,
+            vec![
+                format!("{:?}", Outgoing::ActionInvoked(resident, "retry".into())),
+                format!("{:?}", Outgoing::ActionInvoked(ordinary, "retry".into())),
+                format!("{:?}", Outgoing::Closed(ordinary, CloseReason::Dismissed)),
+            ],
+            "only the ordinary notification is closed by its action"
+        );
+        let on_screen: Vec<u32> = daemon
+            .store
+            .toasts()
+            .map(|entry| entry.notification.id)
+            .collect();
+        assert_eq!(on_screen, vec![resident], "the resident one is still up");
+
+        let (signals, receiver) = async_channel::unbounded();
+        for event in published {
+            signals
+                .send(event)
+                .await
+                .expect("queueing an outgoing event");
+        }
+        signals.close();
+        freedesktop::emit_signals(&server.connection, receiver)
+            .await
+            .expect("the signal driver should not fail");
+
+        let signal = smol::future::or(invocations.next(), async {
+            smol::Timer::after(PATIENCE).await;
+            None
+        })
+        .await
+        .expect("no ActionInvoked arrived");
+        let args = signal.args().expect("signal arguments");
+        assert_eq!(*args.id(), resident);
+        assert_eq!(args.action_key(), "retry");
     });
 }

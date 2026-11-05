@@ -54,7 +54,7 @@ pub struct Daemon {
     /// does not re-announce a bool that did not change.
     announced_quiet: bool,
     /// Bumped by every change a window could need to redraw for; the core
-    /// publishes a fresh [`Snapshot`] whenever it moved.
+    /// publishes a fresh [`Snapshot`](crate::daemon::Snapshot) whenever it moved.
     pub version: u64,
     /// Events waiting to be published. Never drained from inside the call that
     /// produced them — see the module documentation.
@@ -254,14 +254,19 @@ impl Daemon {
     ///
     /// The notification is closed because the user has answered it — leaving it
     /// on screen after its action fired is how a toast ends up being clicked
-    /// twice, and the spec's own `ActionInvoked` example closes it too.
+    /// twice, and the spec's own `ActionInvoked` example closes it too. A
+    /// resident one stays: the spec keeps it until its sender or the user
+    /// removes it, and a "Try again" on a loader must not take the loader down.
     pub fn invoke_action(&mut self, id: NotificationId, action: &str) {
-        if self.store.get(id).is_none() {
+        let Some(entry) = self.store.get(id) else {
             log::debug!("action {action:?} on unknown notification {id} ignored");
             return;
-        }
+        };
+        let resident = entry.notification.resident;
         self.publish(Outgoing::ActionInvoked(id, action.to_string()));
-        self.close(id, CloseReason::Dismissed);
+        if !resident {
+            self.close(id, CloseReason::Dismissed);
+        }
     }
 
     /// Carries out everything about `action` that reaches past the window it
@@ -677,6 +682,48 @@ mod tests {
             0,
             "an action on a notification nobody has must not be announced"
         );
+    }
+
+    #[test]
+    fn invoking_an_action_on_a_resident_notification_leaves_it_on_screen() {
+        let mut state = state();
+        let id = state.post(Notification::builder("Android apps").resident(true).build());
+
+        state.invoke_action(id, "retry");
+        assert_eq!(
+            published(&mut state.borrow_mut()),
+            vec![format!(
+                "{:?}",
+                Outgoing::ActionInvoked(id, "retry".to_string())
+            )],
+            "a resident notification is announced, never closed"
+        );
+        assert_eq!(state.borrow().store.toasts().len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_resident_notification_with_a_default_action_keeps_it() {
+        let mut shared = shared();
+        let id = shared.post(
+            Notification::builder("Android apps")
+                .resident(true)
+                .action(Action {
+                    key: "default".to_string(),
+                    label: "Open".to_string(),
+                    kind: ActionKind::Default,
+                })
+                .build(),
+        );
+
+        shared.perform(id, &CardAction::Activate);
+        assert_eq!(
+            published(&mut shared),
+            vec![format!(
+                "{:?}",
+                Outgoing::ActionInvoked(id, "default".to_string())
+            )]
+        );
+        assert_eq!(shared.store.toasts().len(), 1);
     }
 
     #[test]
