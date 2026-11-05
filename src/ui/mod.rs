@@ -3,9 +3,11 @@
 //! Nothing here reads a socket or decides policy. A window is handed
 //! [`Snapshot`](crate::daemon::Snapshot)s and draws them; what it produces from
 //! a click is a [`Request`](crate::daemon::Request) naming an intent, which the
-//! core turns into a store mutation or a phone command.
+//! core turns into a store mutation or a phone command. The one thing a window
+//! asks the compositor itself is to raise the app a card was clicked for.
 
 pub mod action;
+pub mod activation;
 pub mod board;
 pub mod card;
 pub mod center;
@@ -22,6 +24,7 @@ pub mod widget;
 pub mod window;
 
 pub use action::{CardAction, MediaAction};
+pub use activation::Activation;
 pub use board::{BoardHandle, Frame, Side};
 pub use card::relative_time;
 pub use deck::{Deck, Pose};

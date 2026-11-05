@@ -10,10 +10,11 @@ use crate::{
     model::{CloseReason, Notification},
     ui::{
         action::CardAction,
+        activation::Activation,
         board::{BoardHandle, Frame, Side},
         card::card_content,
         env::Env,
-        widget::{Symbol, measured, reaction, round_button, takes_input, tap},
+        widget::{NodeRef, Symbol, measured, reaction, round_button, takes_input, tap, tracked},
     },
 };
 
@@ -41,10 +42,15 @@ pub fn tile(
         let hovered = cx.signal(false);
         let swiped = cx.signal(false);
         let size = cx.signal(Size::ZERO);
+        let activation = Activation {
+            env,
+            notification,
+            card: NodeRef::new(cx),
+        };
         let geometry =
             move |read: fn(&Frame) -> f32| bind(move |runtime| frame.with(runtime, read));
 
-        let content = measured((card_content(env, notification, hovered),), size)
+        let content = measured((card_content(activation, hovered),), size)
             .absolute()
             .top(0.0)
             .left(0.0)
@@ -74,6 +80,10 @@ pub fn tile(
             || hstack(()),
         );
         let shell = zstack((
+            tracked(activation.card)
+                .absolute()
+                .inset(0.0)
+                .pointer_events_none(),
             content,
             close,
             reaction(
@@ -106,7 +116,7 @@ pub fn tile(
         .on_pointer_leave(move |cx, _| hovered.set(cx, false))
         .on_click(move |cx, _| match board.collapsed(cx, id) {
             Some(key) => board.toggle(cx, &key),
-            None => env.send(cx, Request::Perform(id, CardAction::Activate)),
+            None => activation.perform(cx, CardAction::Activate),
         });
         match side {
             Side::History => shell,

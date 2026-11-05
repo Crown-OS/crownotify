@@ -13,10 +13,10 @@ use crownui::prelude::{
 };
 
 use crate::{
-    daemon::Request,
-    model::{Action, ActionKind, Content, Notification, NotificationId},
+    model::{Action, ActionKind, Content, Notification},
     ui::{
         action::CardAction,
+        activation::Activation,
         card::{
             CONTROL_GAP, CONTROL_SPACING, LINE_GAP, card_picture, own_icon, progress::indicator,
             relative_time,
@@ -34,7 +34,10 @@ const BODY_LINES: u32 = 4;
 /// Share of a round button the chevron's circle takes, against a pill's height.
 const CHEVRON_SCALE: f32 = 0.8;
 
-pub fn general(env: Env, notification: Signal<Notification>, hovered: Signal<bool>) -> impl View {
+pub fn general(activation: Activation, hovered: Signal<bool>) -> impl View {
+    let Activation {
+        env, notification, ..
+    } = activation;
     let theme = env.theme;
     let metrics = theme.metrics;
     let read = move |runtime: &mut Runtime, field: fn(&Notification) -> String| {
@@ -113,10 +116,8 @@ pub fn general(env: Env, notification: Signal<Notification>, hovered: Signal<boo
         .gap(metrics.icon_gap)
         .items_start(),
         keyed(
-            move |runtime| {
-                notification.with(runtime, |n| (n.id, buttons(n).cloned().collect::<Vec<_>>()))
-            },
-            move |_, (id, actions)| actions_row(env, id, actions),
+            move |runtime| notification.with(runtime, |n| buttons(n).cloned().collect::<Vec<_>>()),
+            move |_, actions| actions_row(activation, actions),
         ),
     ))
 }
@@ -179,12 +180,12 @@ pub fn fitting(widths: &[f32], available: f32, chevron: f32) -> usize {
 
 /// The action pills along the bottom of the card, aligned with the text column,
 /// with whatever does not fit behind a chevron.
-fn actions_row(env: Env, id: NotificationId, actions: Vec<Action>) -> impl View {
+fn actions_row(activation: Activation, actions: Vec<Action>) -> impl View {
     component(move |cx| {
         if actions.is_empty() {
             return hstack(()).boxed();
         }
-        let theme = env.theme;
+        let theme = activation.env.theme;
         let metrics = theme.metrics;
         let available = metrics.card_width - 2.0 * metrics.pad_x - metrics.icon - metrics.icon_gap;
         let chevron = metrics.button * CHEVRON_SCALE;
@@ -200,7 +201,7 @@ fn actions_row(env: Env, id: NotificationId, actions: Vec<Action>) -> impl View 
             fitting(&measured, available, chevron)
         });
         let invoke = move |key: String| {
-            tap(move |cx| env.send(cx, Request::Perform(id, CardAction::Invoke(key.clone()))))
+            tap(move |cx| activation.perform(cx, CardAction::Invoke(key.clone())))
         };
         // Every pill is laid out once off to the side, so the row knows how
         // wide each is before it decides how many it has room for.
@@ -264,7 +265,7 @@ fn actions_row(env: Env, id: NotificationId, actions: Vec<Action>) -> impl View 
                     let spilled = overflow[shown.min(overflow.len())..].to_vec();
                     show(
                         open && !spilled.is_empty(),
-                        move || menu(env, id, spilled.clone()).mt(CONTROL_SPACING),
+                        move || menu(activation, spilled.clone()).mt(CONTROL_SPACING),
                         || hstack(()),
                     )
                 },

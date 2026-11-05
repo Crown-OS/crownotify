@@ -25,6 +25,7 @@ use crate::{
     model::{Content, DeviceKind, Icon, Notification},
     profile::{ContentHint, profile_for},
     ui::{
+        activation::Activation,
         env::Env,
         widget::{Picture, picture},
     },
@@ -39,16 +40,15 @@ pub const CONTROL_GAP: f32 = 10.0;
 /// Gap between two side-by-side controls.
 pub const CONTROL_SPACING: f32 = 8.0;
 
-/// The contents of the card for `notification`, inside the card's padding.
-pub fn card_content(
-    env: Env,
-    notification: Signal<Notification>,
-    hovered: Signal<bool>,
-) -> impl View {
+/// The contents of the card `activation` acts for, inside the card's padding.
+pub fn card_content(activation: Activation, hovered: Signal<bool>) -> impl View {
+    let Activation {
+        env, notification, ..
+    } = activation;
     keyed(
         move |runtime| notification.with(runtime, view_kind),
         move |_, kind| match kind {
-            ContentHint::General => general::general(env, notification, hovered).boxed(),
+            ContentHint::General => general::general(activation, hovered).boxed(),
             ContentHint::Call => call::call(env, notification).boxed(),
             ContentHint::Chat => chat::chat(env, notification, hovered).boxed(),
             ContentHint::Music => music::music(env, notification).boxed(),

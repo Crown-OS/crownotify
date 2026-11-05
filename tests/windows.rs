@@ -1,7 +1,7 @@
 //! Both windows, driven headlessly: what each shows for a snapshot, what a
 //! click asks of the daemon, and what the surfaces let through.
 
-use std::sync::Arc;
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use calloop::channel::Channel;
 use chrono::Local;
@@ -9,10 +9,16 @@ use crownotify::{
     daemon::{Request, Snapshot},
     model::{Action, ActionKind, Call, Chat, CloseReason, Content, Notification, Progress},
     profile::table::Profiles,
-    ui::{CardAction, Theme, Window, center, popup},
+    ui::{
+        Activation, CardAction, Theme, Window, card::card_content, center, env::Env, popup,
+        widget::NodeRef,
+    },
 };
 use crownui::crowntest::{Query, Role, TestApp, role};
-use crownui::prelude::{KeyboardInteractivity, Rect};
+use crownui::{
+    ext::AppIconRequest,
+    prelude::{Capabilities, KeyboardInteractivity, Rect, Signal, Styled, component, vstack},
+};
 use tokio::sync::watch;
 
 const STRIP: (f32, f32) = (400.0, 900.0);
@@ -73,6 +79,19 @@ impl Harness {
             .inline()
             .last_surface()
             .and_then(|surface| surface.keyboard)
+    }
+
+    /// Tells the window it runs on a compositor that can raise apps.
+    fn with_app_icons(mut self) -> Self {
+        self.app.ui().set_platform_capabilities(Capabilities {
+            app_icons: true,
+            ..Capabilities::default()
+        });
+        self
+    }
+
+    fn app_icon_requests(&mut self) -> Vec<AppIconRequest> {
+        self.app.ui().take_app_icon_requests()
     }
 }
 
@@ -385,5 +404,206 @@ fn a_progress_notification_spins_until_it_knows_how_far_it_has_got() {
     assert!(
         !filling.app.exists(spinner()),
         "a known completion is a bar, not a spinner"
+    );
+}
+
+#[test]
+fn switching_between_spinner_and_bar_leaves_the_rest_of_the_card_alone() {
+    let shared: Rc<Cell<Option<Signal<Notification>>>> = Rc::default();
+    let published = Rc::clone(&shared);
+    let (requests, _received) = calloop::channel::channel();
+    let theme = Theme::light();
+    let mut notification = loader(1, None);
+    for (key, text) in [
+        ("cancel", "Cancel"),
+        ("details", "Show details"),
+        ("pause", "Pause the download"),
+        ("later", "Remind me later"),
+    ] {
+        notification.actions.push(Action {
+            key: key.into(),
+            label: text.into(),
+            kind: ActionKind::Button,
+        });
+    }
+    let root = component(move |cx| {
+        let env = Env::new(cx, theme, Profiles::default(), requests.clone());
+        let notification = cx.signal(notification.clone());
+        published.set(Some(notification));
+        let activation = Activation {
+            env,
+            notification,
+            card: NodeRef::new(cx),
+        };
+        vstack((card_content(activation, cx.signal(false)),)).w(theme.metrics.card_width)
+    });
+    let mut app = TestApp::with_size(root, STRIP.0, STRIP.1);
+    app.settle();
+    let notification = shared.get().expect("the card was built");
+
+    app.click(role(Role::Button).name("More actions")).settle();
+    assert!(app.exists(role(Role::Button).name("Remind me later")));
+
+    notification.update(app.ui().cx(), |n| {
+        n.content = Content::Progress(Progress {
+            label: "Downloading the system image".into(),
+            percent: Some(40),
+        })
+    });
+    app.settle();
+
+    assert!(
+        !app.exists(spinner()),
+        "the spinner should have become a bar"
+    );
+    assert!(
+        app.exists(role(Role::Button).name("Remind me later")),
+        "the open menu closed, so the card was rebuilt around the bar"
+    );
+}
+
+/// Whether `inner` lies inside `outer`, give or take the card's rim.
+fn within(inner: Rect, outer: Rect) -> bool {
+    const RIM: f32 = 1.5;
+    inner.min_x() >= outer.min_x() - RIM
+        && inner.min_y() >= outer.min_y() - RIM
+        && inner.max_x() <= outer.max_x() + RIM
+        && inner.max_y() <= outer.max_y() + RIM
+        && inner.size.width >= outer.size.width - 2.0 * RIM
+}
+
+#[test]
+fn clicking_a_toast_raises_its_app_out_of_the_card_before_activating_it() {
+    let android = Notification::builder("Signal")
+        .id(1)
+        .summary("Ada Lovelace")
+        .desktop_entry("waydroid.org.thoughtcrime.securesms")
+        .build();
+    let mut harness = Harness::popup(toasts(vec![android])).with_app_icons();
+    let card = harness
+        .app
+        .find(role(Role::ListItem).name("Signal: Ada Lovelace"))
+        .bounds;
+
+    harness.app.click(label("Ada Lovelace"));
+
+    let app_id = "waydroid.org.thoughtcrime.securesms".to_string();
+    let requests = harness.app_icon_requests();
+    let [
+        AppIconRequest::Set(placed, placement),
+        AppIconRequest::Activate(activated),
+        AppIconRequest::Remove(removed),
+    ] = requests.as_slice()
+    else {
+        panic!("expected the icon put up, activated and taken down, got {requests:?}");
+    };
+    assert_eq!([placed, activated, removed], [&app_id, &app_id, &app_id]);
+    assert!(
+        within(placement.rect, card),
+        "the window should grow out of the card at {card:?}, not {:?}",
+        placement.rect
+    );
+    assert_eq!(
+        harness.sent(),
+        vec![Request::Perform(1, CardAction::Activate)],
+        "the daemon still hears about the click"
+    );
+}
+
+#[test]
+fn an_action_button_raises_the_app_and_still_invokes_its_key() {
+    let notification = Notification::builder("Mail")
+        .id(4)
+        .summary("Invite")
+        .desktop_entry("org.mozilla.thunderbird")
+        .action(Action {
+            key: "accept".into(),
+            label: "Accept".into(),
+            kind: ActionKind::Button,
+        })
+        .build();
+    let mut harness = Harness::popup(toasts(vec![notification])).with_app_icons();
+    harness.app.click(role(Role::Button).name("Accept"));
+
+    assert!(
+        harness
+            .app_icon_requests()
+            .contains(&AppIconRequest::Activate("org.mozilla.thunderbird".into())),
+        "the app was not raised"
+    );
+    assert_eq!(
+        harness.sent(),
+        vec![Request::Perform(4, CardAction::Invoke("accept".into()))]
+    );
+}
+
+#[test]
+fn an_action_in_the_overflow_menu_raises_the_app_too() {
+    let mut builder = Notification::builder("Calendar")
+        .id(5)
+        .summary("Design review")
+        .desktop_entry("org.gnome.Calendar");
+    for (key, text) in [
+        ("snooze", "Snooze"),
+        ("join", "Join"),
+        ("decline", "Decline"),
+        ("later", "Remind me later"),
+    ] {
+        builder = builder.action(Action {
+            key: key.into(),
+            label: text.into(),
+            kind: ActionKind::Button,
+        });
+    }
+    let mut harness = Harness::popup(toasts(vec![builder.build()])).with_app_icons();
+    harness
+        .app
+        .click(role(Role::Button).name("More actions"))
+        .settle();
+    harness
+        .app
+        .click(role(Role::Button).name("Remind me later"));
+
+    assert!(
+        harness
+            .app_icon_requests()
+            .contains(&AppIconRequest::Activate("org.gnome.Calendar".into()))
+    );
+    assert_eq!(
+        harness.sent(),
+        vec![Request::Perform(5, CardAction::Invoke("later".into()))]
+    );
+}
+
+#[test]
+fn a_notification_with_no_desktop_entry_raises_nothing() {
+    let mut harness = Harness::popup(toasts(vec![mail(1, "Ada Lovelace")])).with_app_icons();
+    harness.app.click(label("Ada Lovelace"));
+
+    assert!(
+        harness.app_icon_requests().is_empty(),
+        "there is no app to raise"
+    );
+    assert_eq!(
+        harness.sent(),
+        vec![Request::Perform(1, CardAction::Activate)]
+    );
+}
+
+#[test]
+fn dismissing_a_toast_raises_nothing() {
+    let notification = Notification::builder("Mail")
+        .id(1)
+        .summary("Ada Lovelace")
+        .desktop_entry("org.mozilla.thunderbird")
+        .build();
+    let mut harness = Harness::popup(toasts(vec![notification])).with_app_icons();
+    harness.app.hover(label("Ada Lovelace")).settle();
+    harness.app.click(role(Role::Button).name("Dismiss"));
+
+    assert!(harness.app_icon_requests().is_empty());
+    assert_eq!(
+        harness.sent(),
+        vec![Request::Perform(1, CardAction::Dismiss)]
     );
 }

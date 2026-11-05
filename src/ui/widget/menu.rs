@@ -10,9 +10,8 @@ use crownui::{
 };
 
 use crate::{
-    daemon::Request,
-    model::{Action, NotificationId},
-    ui::{action::CardAction, env::Env, widget::tap::tap},
+    model::Action,
+    ui::{action::CardAction, activation::Activation, widget::tap::tap},
 };
 
 const ROW_HEIGHT: f32 = 30.0;
@@ -21,9 +20,10 @@ const PAD_Y: f32 = 4.0;
 const RADIUS: f32 = 10.0;
 const ROW_RADIUS: f32 = 6.0;
 
-/// Every action in `items`, one row each; a click invokes it on `id`.
-pub fn menu(env: Env, id: NotificationId, items: Vec<Action>) -> Element<impl Kind> {
-    let theme = env.theme;
+/// Every action in `items`, one row each; a click invokes it through
+/// `activation`.
+pub fn menu(activation: Activation, items: Vec<Action>) -> Element<impl Kind> {
+    let theme = activation.env.theme;
     let rows: Vec<_> = items
         .into_iter()
         .map(|Action { key, label, .. }| {
@@ -37,7 +37,7 @@ pub fn menu(env: Env, id: NotificationId, items: Vec<Action>) -> Element<impl Ki
                 .role(Role::Button)
                 .label(label)
                 .on_click(tap(move |cx| {
-                    env.send(cx, Request::Perform(id, CardAction::Invoke(key.clone())))
+                    activation.perform(cx, CardAction::Invoke(key.clone()))
                 }))
         })
         .collect();
