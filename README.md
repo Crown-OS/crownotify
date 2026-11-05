@@ -9,7 +9,9 @@ Crownotify is a beautiful notification server for CrownOS and other Wayland desk
 - **Per-app overrides.** Mute an app, force its level or timeout, turn grouping on or off, or give it its own accent colour.
 - **App profiles.** Known apps such as Spotify get the right card and brand colour without having to ask for them.
 - **Relayed notifications.** Notifications mirrored from a phone or tablet carry a device badge, and call actions go back to the phone through crownconnect.
-- **Click to launch.** Clicking a notification from an app that isn't listening opens the app from its desktop entry.
+- **Click to raise.** Clicking a notification, or one of its actions, brings forward the windows of the app its `desktop-entry` names, Android apps included. An app that isn't listening is opened from its desktop entry.
+- **Live progress.** A progress notification shows a bar when it knows how far it has got and a spinner when it doesn't, and updates in place.
+- **Resident notifications.** A notification with the `resident` hint stays up when one of its actions is invoked, and updates to it stay where it is, even under Do Not Disturb.
 - **Fault tolerant.** A malformed hint or config file is logged and ignored. If another server already owns the D-Bus name, CrownOS's own notifications keep working over crownos-ipc.
 
 ## Installation
@@ -120,7 +122,8 @@ notify-send -h string:x-crownos.interruption-level:time-sensitive "Meeting" "Sta
 The CrownOS shell talks to the `crownotify` service defined in [`src/proto.rs`](src/proto.rs). It covers:
 
 - **Commands:** open, close and toggle the center; set Do Not Disturb or a focus mode; dismiss all; invoke an action; close a notification.
-- **Posting:** typed calls to post general, call, music, chat, app-profile and relayed notifications.
+- **Posting:** typed calls to post general, call, music, chat, app-profile, relayed and progress notifications.
+- **Progress:** `send_progress_notification(replaces_id, app_name, icon, summary, body, percent, actions)` posts a resident notification that never expires (`replaces_id` 0) or updates one in place. `percent: None` shows a spinner. `actions` are id, label pairs as in `Notify`. It stays up when an action is invoked and goes when `close_notification` withdraws it.
 - **Events:** `NotificationClosed`, `ActionInvoked`, `ReplySubmitted`, `CenterVisibility`, `DoNotDisturbChanged` and `FocusModeChanged`.
 
 ## Development

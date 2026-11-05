@@ -1,4 +1,4 @@
-//! Turns an [`Icon`](crate::model::Icon) into straight-alpha RGBA pixels, with
+//! Turns an [`Icon`] into straight-alpha RGBA pixels, with
 //! a cache that survives across cards.
 //!
 //! A card decodes its pictures when it is built, so nothing here may touch a
@@ -16,7 +16,7 @@
 //! * `resvg`/`tiny-skia` rasterise into premultiplied RGBA
 //!   (`tiny_skia::Pixmap::data` is documented as such), so the SVG path
 //!   divides the alpha back out.
-//! * [`ImageData`](crate::model::ImageData) (the freedesktop `image-data`
+//! * [`ImageData`] (the freedesktop `image-data`
 //!   hint) is straight already, and at its native size is handed back as the
 //!   very same allocation.
 

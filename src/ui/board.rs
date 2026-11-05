@@ -9,7 +9,7 @@
 //! the springs put them — and the compositor's blur and the window's input
 //! region, both taken from layout, follow them frame by frame.
 //!
-//! Every change that starts a spring is queued as an [`Intent`] and applied at
+//! Every change that starts a spring is queued as an `Intent` and applied at
 //! the next frame, against that frame's own timestamp: a card posted after an
 //! hour of quiet then slides in from the moment it is first drawn, and a
 //! headless test's simulated clock drives the springs exactly as the display
