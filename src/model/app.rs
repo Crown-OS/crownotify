@@ -4,6 +4,8 @@ use std::borrow::Cow;
 
 use crate::model::icon::Icon;
 
+const DESKTOP_SUFFIX: &str = ".desktop";
+
 /// The sending application, as far as the notification records it.
 ///
 /// `name` is a display string the app chose and may change between releases;
@@ -32,6 +34,13 @@ impl AppIdentity {
             Cow::Borrowed(raw)
         }
     }
+
+    /// The app id the compositor knows the sender by: its desktop entry
+    /// without the `.desktop` suffix some senders leave on the hint.
+    pub fn app_id(&self) -> Option<&str> {
+        let entry = self.desktop_entry.as_deref()?;
+        Some(entry.strip_suffix(DESKTOP_SUFFIX).unwrap_or(entry))
+    }
 }
 
 #[cfg(test)]
@@ -55,6 +64,19 @@ mod tests {
     #[test]
     fn the_display_name_is_the_key_when_there_is_no_desktop_entry() {
         assert_eq!(app("dunstify", None).key(), "dunstify");
+    }
+
+    #[test]
+    fn the_app_id_drops_a_trailing_desktop_suffix() {
+        assert_eq!(
+            app("Files", Some("org.gnome.Nautilus.desktop")).app_id(),
+            Some("org.gnome.Nautilus")
+        );
+        assert_eq!(
+            app("Files", Some("org.gnome.Nautilus")).app_id(),
+            Some("org.gnome.Nautilus")
+        );
+        assert_eq!(app("dunstify", None).app_id(), None);
     }
 
     #[test]

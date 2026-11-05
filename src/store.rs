@@ -134,7 +134,8 @@ impl Store {
     ///
     /// A notification whose id is only in history is re-posted as a fresh
     /// toast under the same id, and the stale history copy is dropped so that
-    /// no id is ever filed twice.
+    /// no id is ever filed twice. An id the store has never seen moves the
+    /// counter past it, so a later allocation cannot hand it out again.
     ///
     /// A resident replacement is the exception: a loader that reports every
     /// percent is updated wherever it is, in the center included, and the
@@ -158,6 +159,7 @@ impl Store {
             entry.received = Instant::now();
             return id;
         }
+        self.ids.fetch_max(id, Ordering::Relaxed);
         self.history.retain(|entry| entry.notification.id != id);
 
         let outcome = self.outcome_for(&mut notification);
@@ -608,6 +610,29 @@ mod tests {
 
         assert_eq!(store.post(notification), 77);
         assert_eq!(toast_ids(&store), vec![77]);
+    }
+
+    #[test]
+    fn an_unknown_replaces_id_moves_the_counter_past_it() {
+        let mut store = store();
+        let mut notification = notification("Mail", "Hello");
+        notification.id = 77;
+        store.post(notification);
+
+        assert_eq!(store.next_id(), 78);
+        assert_eq!(allocate_id(&store.id_counter()), 79);
+    }
+
+    #[test]
+    fn a_known_id_never_moves_the_counter_backwards() {
+        let mut store = store();
+        let first = store.post(notification("Mail", "Hello"));
+        store.post(notification("Chat", "Hi"));
+        let mut replacement = notification("Mail", "Edited");
+        replacement.id = first;
+        store.post(replacement);
+
+        assert_eq!(store.next_id(), 3);
     }
 
     #[test]

@@ -29,11 +29,11 @@ impl Activation {
     /// `action` to the daemon, which publishes `ActionInvoked` as it always
     /// has. A notification without a desktop entry only does the latter.
     pub fn perform(self, cx: &mut Cx, action: CardAction) {
-        let (id, entry) = self
+        let (id, app_id) = self
             .notification
-            .with_untracked(cx, |n| (n.id, n.app.desktop_entry.clone()));
-        if let (Some(entry), Some(card)) = (entry, self.card.window_rect(cx)) {
-            raise(cx, &entry, card, self.env.theme.metrics.card_radius);
+            .with_untracked(cx, |n| (n.id, n.app.app_id().map(str::to_owned)));
+        if let (Some(app_id), Some(card)) = (app_id, self.card.window_rect(cx)) {
+            raise(cx, &app_id, card, self.env.theme.metrics.card_radius);
         }
         self.env.send(cx, Request::Perform(id, action));
     }
