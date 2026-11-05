@@ -156,6 +156,17 @@ fn samples() -> Vec<Notification> {
                 percent: Some(37),
             }))
             .build(),
+        Notification::builder("Android apps")
+            .id(8)
+            .summary("Setting up Android apps")
+            .body("Preparing the download")
+            .resident(true)
+            .content(Content::Progress(Progress {
+                label: "Preparing the download".into(),
+                percent: None,
+            }))
+            .action(button("cancel", "Cancel"))
+            .build(),
         Notification::builder("Mail")
             .id(6)
             .summary("Quarterly figures")

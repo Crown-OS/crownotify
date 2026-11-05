@@ -7,7 +7,7 @@ use calloop::channel::Channel;
 use chrono::Local;
 use crownotify::{
     daemon::{Request, Snapshot},
-    model::{Action, ActionKind, Call, Chat, CloseReason, Content, Notification},
+    model::{Action, ActionKind, Call, Chat, CloseReason, Content, Notification, Progress},
     profile::table::Profiles,
     ui::{CardAction, Theme, Window, center, popup},
 };
@@ -350,5 +350,40 @@ fn the_center_header_clears_history_and_toggles_do_not_disturb() {
     assert_eq!(
         harness.sent(),
         vec![Request::SetDoNotDisturb(true), Request::ClearHistory]
+    );
+}
+
+/// A progress notification from the Android setup, `percent` done.
+fn loader(id: u32, percent: Option<u8>) -> Notification {
+    Notification::builder("Android apps")
+        .id(id)
+        .summary("Setting up Android apps")
+        .body("Downloading the system image")
+        .resident(true)
+        .content(Content::Progress(Progress {
+            label: "Downloading the system image".into(),
+            percent,
+        }))
+        .build()
+}
+
+fn spinner() -> Query {
+    role(Role::ProgressBar)
+}
+
+#[test]
+fn a_progress_notification_spins_until_it_knows_how_far_it_has_got() {
+    let mut spinning = Harness::popup(toasts(vec![loader(1, None)]));
+    assert!(
+        spinning.app.exists(spinner()),
+        "{}",
+        spinning.app.snapshot()
+    );
+    assert!(spinning.app.exists(label("Setting up Android apps")));
+
+    let mut filling = Harness::popup(toasts(vec![loader(1, Some(40))]));
+    assert!(
+        !filling.app.exists(spinner()),
+        "a known completion is a bar, not a spinner"
     );
 }

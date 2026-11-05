@@ -17,11 +17,12 @@ use crate::{
     model::{Action, ActionKind, Content, Notification, NotificationId},
     ui::{
         action::CardAction,
-        card::{CONTROL_GAP, CONTROL_SPACING, LINE_GAP, card_picture, own_icon, relative_time},
-        env::Env,
-        widget::{
-            ButtonStyle, Symbol, bar, measured, menu, percent_fraction, pill, round_button, tap,
+        card::{
+            CONTROL_GAP, CONTROL_SPACING, LINE_GAP, card_picture, own_icon, progress::indicator,
+            relative_time,
         },
+        env::Env,
+        widget::{ButtonStyle, Symbol, measured, menu, pill, round_button, tap},
     },
 };
 
@@ -30,10 +31,6 @@ const SUMMARY_LINES: u32 = 2;
 /// How many lines the body may occupy. The number the design fixes: past four
 /// lines a toast stops being a glance and starts being a document.
 const BODY_LINES: u32 = 4;
-/// Gap above a progress bar.
-const PROGRESS_GAP: f32 = 8.0;
-/// Height of the band a progress bar is centred in.
-const PROGRESS_BAND: f32 = 10.0;
 /// Share of a round button the chevron's circle takes, against a pill's height.
 const CHEVRON_SCALE: f32 = 0.8;
 
@@ -95,21 +92,7 @@ pub fn general(env: Env, notification: Signal<Notification>, hovered: Signal<boo
             },
             || hstack(()),
         ),
-        show(
-            bind(move |runtime| notification.with(runtime, |n| progress(n).is_some())),
-            move || {
-                bar(
-                    move |runtime| {
-                        notification.with(runtime, |n| percent_fraction(progress(n).unwrap_or(0)))
-                    },
-                    theme.palette.separator,
-                    theme.palette.accent,
-                )
-                .h(PROGRESS_BAND)
-                .mt(PROGRESS_GAP)
-            },
-            || hstack(()),
-        ),
+        indicator(theme, notification),
     ))
     .gap(LINE_GAP)
     .grow(1.0)
@@ -160,13 +143,6 @@ fn body(notification: &Notification) -> &str {
     match &notification.content {
         Content::Progress(progress) if notification.body.is_empty() => &progress.label,
         _ => &notification.body,
-    }
-}
-
-fn progress(notification: &Notification) -> Option<u8> {
-    match &notification.content {
-        Content::Progress(progress) => progress.percent,
-        _ => None,
     }
 }
 

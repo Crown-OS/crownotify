@@ -16,6 +16,7 @@ pub mod call;
 pub mod chat;
 pub mod general;
 pub mod music;
+pub mod progress;
 pub mod time;
 
 use crownui::prelude::{Runtime, Signal, View, keyed};

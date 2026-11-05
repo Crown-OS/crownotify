@@ -10,6 +10,7 @@ pub mod menu;
 pub mod picture;
 pub mod progress;
 pub mod reaction;
+pub mod spinner;
 pub mod tap;
 
 pub use autofocus::autofocus;
@@ -21,4 +22,5 @@ pub use menu::menu;
 pub use picture::{Picture, picture};
 pub use progress::{bar, percent_fraction, scrubber, seek_percent};
 pub use reaction::reaction;
+pub use spinner::{SPINNER_DIAMETER, spinner};
 pub use tap::tap;
