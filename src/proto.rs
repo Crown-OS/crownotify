@@ -1,7 +1,7 @@
 //! The wire contract of the `crownotify` service.
 //!
 //! Lives in the library target, outside the `daemon` feature, so that every
-//! client — the bar's notification pill, a keybinding helper, crownconnect
+//! client — the bar's notification pill, a keybinding helper, crownlink
 //! relaying a call from the phone — is generated from the same declaration as
 //! the daemon and cannot drift from it. A client builds this module and
 //! nothing else: none of the rendering, decoding or D-Bus stack comes with it.

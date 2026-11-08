@@ -1,7 +1,7 @@
 //! The outbound half: commands the cards send to the phone companion.
 //!
-//! crownotify is a *client* of crownconnect, and an unreliable one by nature —
-//! crownconnect is a separate daemon that may be restarting, may not be installed
+//! crownotify is a *client* of crownlink, and an unreliable one by nature —
+//! crownlink is a separate daemon that may be restarting, may not be installed
 //! and may never come up at all. That shapes the whole module: connecting is
 //! lazy, failures are absorbed, and commands issued while the service is down
 //! wait in a bounded queue instead of being lost. Answering a call is the
@@ -20,16 +20,16 @@ use std::{
 
 use crownos_ipc::Pending;
 
-use crate::ipc::crownconnect_protocol as crownconnect;
+use crate::ipc::crownlink_protocol as crownlink;
 
 /// How long to wait before retrying a connection that failed.
 ///
-/// Long enough that a permanently-absent crownconnect costs a syscall a second
+/// Long enough that a permanently-absent crownlink costs a syscall a second
 /// rather than one per frame, short enough that a restart is picked up before
 /// the user notices.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 
-/// How many commands may wait for a crownconnect that is not there.
+/// How many commands may wait for a crownlink that is not there.
 ///
 /// A queue that grew without limit would turn "the phone daemon is not
 /// installed" into a slow memory leak in the notification server. Sixty-four
@@ -53,11 +53,11 @@ pub enum PhoneCommand {
     },
 }
 
-/// Lazily-connected, non-blocking crownconnect client. Commands issued while the
+/// Lazily-connected, non-blocking crownlink client. Commands issued while the
 /// service is down are queued and flushed on the next successful connect, so a
-/// crownconnect restart never loses a hang-up.
+/// crownlink restart never loses a hang-up.
 pub struct PhoneLink {
-    client: Option<crownconnect::Client>,
+    client: Option<crownlink::Client>,
     queue: VecDeque<PhoneCommand>,
     /// Answering and declining are requests rather than notifications, so they
     /// leave a reply outstanding. The handles are kept only so the replies can
@@ -87,10 +87,10 @@ impl PhoneLink {
         }
     }
 
-    /// A link that looks for crownconnect's socket in `directory`.
+    /// A link that looks for crownlink's socket in `directory`.
     ///
     /// Only the tests need this; the daemon uses the runtime directory that
-    /// crownconnect actually binds in.
+    /// crownlink actually binds in.
     pub fn in_directory(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: Some(directory.into()),
@@ -107,7 +107,7 @@ impl PhoneLink {
     pub fn send(&mut self, command: PhoneCommand) {
         if self.queue.len() >= MAX_QUEUED {
             let dropped = self.queue.pop_front();
-            log::warn!("crownconnect queue is full; dropping {dropped:?}");
+            log::warn!("crownlink queue is full; dropping {dropped:?}");
         }
         self.queue.push_back(command);
         self.pump();
@@ -131,7 +131,7 @@ impl PhoneLink {
                 Err(error) => {
                     // The command goes back to the head of the queue so the
                     // next successful connect replays it.
-                    log::warn!("crownconnect command failed ({error}); reconnecting");
+                    log::warn!("crownlink command failed ({error}); reconnecting");
                     self.queue.push_front(command);
                     self.disconnect();
                     return;
@@ -143,17 +143,17 @@ impl PhoneLink {
             return;
         };
         if let Err(error) = client.handle_writable() {
-            log::warn!("flushing to crownconnect failed ({error}); reconnecting");
+            log::warn!("flushing to crownlink failed ({error}); reconnecting");
             self.disconnect();
         }
     }
 
-    /// Whether a connection to crownconnect is currently up.
+    /// Whether a connection to crownlink is currently up.
     pub fn is_connected(&self) -> bool {
         self.client.is_some()
     }
 
-    /// Commands still waiting for a crownconnect to send them to.
+    /// Commands still waiting for a crownlink to send them to.
     pub fn queued(&self) -> usize {
         self.queue.len()
     }
@@ -163,13 +163,13 @@ impl PhoneLink {
             return;
         }
         let connected = match &self.directory {
-            Some(directory) => crownconnect::Client::connect_in(directory),
-            None => crownconnect::Client::connect(),
+            Some(directory) => crownlink::Client::connect_in(directory),
+            None => crownlink::Client::connect(),
         };
         match connected {
             Ok(client) => {
                 log::debug!(
-                    "connected to crownconnect; flushing {} commands",
+                    "connected to crownlink; flushing {} commands",
                     self.queue.len()
                 );
                 self.client = Some(client);
@@ -177,7 +177,7 @@ impl PhoneLink {
             }
             Err(error) => {
                 log::debug!(
-                    "crownconnect is not answering ({error}); {} commands queued",
+                    "crownlink is not answering ({error}); {} commands queued",
                     self.queue.len()
                 );
                 self.retry_after = Some(Instant::now() + RECONNECT_INTERVAL);
@@ -191,17 +191,17 @@ impl PhoneLink {
         self.retry_after = Some(Instant::now() + RECONNECT_INTERVAL);
     }
 
-    /// Reads whatever crownconnect has replied and retires the handles.
+    /// Reads whatever crownlink has replied and retires the handles.
     ///
     /// Nothing here needs the answers, but somebody has to read them: an
-    /// unread socket eventually applies backpressure to crownconnect, and an
+    /// unread socket eventually applies backpressure to crownlink, and an
     /// unresolved handle stays in the client's correlation table forever.
     fn harvest(&mut self) {
         let Some(client) = self.client.as_mut() else {
             return;
         };
         if let Err(error) = client.handle_readable() {
-            log::debug!("crownconnect connection lost while reading: {error}");
+            log::debug!("crownlink connection lost while reading: {error}");
             self.disconnect();
             return;
         }
@@ -210,7 +210,7 @@ impl PhoneLink {
             Ok(None) => true,
             Ok(Some(())) => false,
             Err(error) => {
-                log::debug!("crownconnect rejected a call action: {error}");
+                log::debug!("crownlink rejected a call action: {error}");
                 false
             }
         });
@@ -224,7 +224,7 @@ impl PhoneLink {
 /// what makes the queue safe to replay: a duplicated `media_pause` is
 /// harmless, whereas a duplicated pickup would be answered twice.
 fn dispatch(
-    client: &mut crownconnect::Client,
+    client: &mut crownlink::Client,
     command: &PhoneCommand,
 ) -> Result<Option<Pending<()>>, crownos_ipc::Error> {
     match command {
@@ -249,21 +249,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_command_sent_with_crownconnect_absent_is_queued_not_lost() {
+    fn a_command_sent_with_crownlink_absent_is_queued_not_lost() {
         let directory = tempfile::tempdir().expect("temp dir");
         let mut link = PhoneLink::in_directory(directory.path());
 
         link.send(PhoneCommand::Pickup("call-42".into()));
 
-        assert!(
-            !link.is_connected(),
-            "there is no crownconnect to connect to"
-        );
+        assert!(!link.is_connected(), "there is no crownlink to connect to");
         assert_eq!(link.queued(), 1, "the pickup must survive for the retry");
     }
 
     #[test]
-    fn a_permanently_absent_crownconnect_cannot_grow_the_queue_without_limit() {
+    fn a_permanently_absent_crownlink_cannot_grow_the_queue_without_limit() {
         let directory = tempfile::tempdir().expect("temp dir");
         let mut link = PhoneLink::in_directory(directory.path());
 

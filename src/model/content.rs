@@ -22,7 +22,7 @@ pub enum Content {
     Progress(Progress),
 }
 
-/// An incoming phone call relayed by crownconnect.
+/// An incoming phone call relayed by crownlink.
 ///
 /// `call_id` is what the pickup and decline buttons send back, so it has to
 /// survive a replacement of the notification untouched.

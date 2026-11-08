@@ -2,7 +2,7 @@
 //!
 //! This is the one card where a mis-click is expensive, so the answer and
 //! decline buttons are large, saturated, unmistakably coloured discs well clear
-//! of each other. The card is a remote control for a phone that crownconnect is
+//! of each other. The card is a remote control for a phone that crownlink is
 //! relaying, so everything it draws comes out of the
 //! [`Call`](crate::model::Call) payload, and it degrades to the notification's
 //! own summary and body when a profile forced it here without one.

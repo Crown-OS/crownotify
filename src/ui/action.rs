@@ -33,7 +33,7 @@ pub enum MediaAction {
     Pause,
     Next,
     Previous,
-    /// Position as a percentage of the track, matching the crownconnect protocol.
+    /// Position as a percentage of the track, matching the crownlink protocol.
     Seek(u8),
 }
 

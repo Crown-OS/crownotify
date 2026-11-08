@@ -8,7 +8,7 @@ Crownotify is a beautiful notification server for CrownOS and other Wayland desk
 - **Interruption levels.** `passive`, `active`, `time-sensitive` and `critical`, taken from the freedesktop urgency or set directly by apps that know about CrownOS. Critical notifications always get through.
 - **Per-app overrides.** Mute an app, force its level or timeout, turn grouping on or off, or give it its own accent colour.
 - **App profiles.** Known apps such as Spotify get the right card and brand colour without having to ask for them.
-- **Relayed notifications.** Notifications mirrored from a phone or tablet carry a device badge, and call actions go back to the phone through crownconnect.
+- **Relayed notifications.** Notifications mirrored from a phone or tablet carry a device badge, and call actions go back to the phone through crownlink.
 - **Click to launch.** Clicking a notification from an app that isn't listening opens the app from its desktop entry.
 - **Fault tolerant.** A malformed hint or config file is logged and ignored. If another server already owns the D-Bus name, CrownOS's own notifications keep working over crownos-ipc.
 

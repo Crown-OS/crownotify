@@ -24,16 +24,16 @@
 //!   so deferring every publication is the only scheme with one code path and
 //!   no re-entrancy.
 
-pub mod crownconnect;
+pub mod crownlink;
 
-pub use crownconnect_linux::ipc::proto as crownconnect_protocol;
+pub use crownlink_linux::ipc::proto as crownlink_protocol;
 pub mod server;
 
 use std::path::PathBuf;
 
 use crate::model::{CloseReason, Icon, Notification, NotificationId};
 
-pub use crownconnect::{PhoneCommand, PhoneLink};
+pub use crownlink::{PhoneCommand, PhoneLink};
 pub use server::{NotifyHandler, serve, serve_in};
 
 /// Something a service thread wants the UI thread to do.

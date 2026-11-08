@@ -1,7 +1,7 @@
 //! Which device a notification was mirrored from.
 //!
 //! crownotify shows the notifications of the machine it runs on *and* the ones
-//! crownconnect relays from a paired device, and a card that does not say which
+//! crownlink relays from a paired device, and a card that does not say which
 //! is which is quietly misleading: a message that has already been answered on
 //! the phone looks exactly like one that has not. The badge the icon wears is
 //! the whole answer, so all the model records is what to draw on it and what

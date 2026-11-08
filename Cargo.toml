@@ -21,7 +21,7 @@ default = ["daemon"]
 # Everything but the wire contract: the store, both windows, both transports.
 daemon = [
   "crownos-ipc/calloop",
-  "dep:crownconnect-linux",
+  "dep:crownlink-linux",
   "dep:crownui",
   "dep:tokio",
   "dep:anyhow",
@@ -43,7 +43,7 @@ daemon = [
 [dependencies]
 crownos-ipc = { git = "https://github.com/crown-os/crownos-ipc" }
 # The phone companion's schema only; the cards call it, nothing else does.
-crownconnect-linux = { git = "https://github.com/crown-os/crownconnect-linux", default-features = false, optional = true }
+crownlink-linux = { git = "https://github.com/crown-os/crownlink-linux", default-features = false, optional = true }
 # `protocol!` generates serde structs for every method and event, so the
 # schema half needs this even with `daemon` off.
 serde = { version = "1.0", features = ["derive"] }

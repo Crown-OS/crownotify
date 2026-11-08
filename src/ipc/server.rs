@@ -1,7 +1,7 @@
 //! The crownos-ipc `crownotify` service.
 //!
 //! This is the transport the rest of the shell uses: the bar's notification
-//! applet, crownconnect relaying a call from the phone, a keybinding helper
+//! applet, crownlink relaying a call from the phone, a keybinding helper
 //! toggling Do Not Disturb. It runs **on crownshell's calloop loop** rather
 //! than a thread of its own, so a request reaches the store without a channel
 //! hop and without a lock.

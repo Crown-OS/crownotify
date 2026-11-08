@@ -481,9 +481,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
-name = "crownconnect-linux"
-version = "0.1.0"
-source = "git+https://github.com/crown-os/crownconnect-linux#1f98db9bee635514cf0d2030a4ddcc20b84fba92"
+name = "crownlink-linux"
+version = "0.1.1"
+source = "git+https://github.com/crown-os/crownlink-linux#318c5ea0d3f7534a45304f59f864f5a497194a20"
 dependencies = [
  "crownos-ipc",
  "serde",
@@ -510,7 +510,7 @@ dependencies = [
  "async-channel",
  "calloop 0.13.0",
  "chrono",
- "crownconnect-linux",
+ "crownlink-linux",
  "crownos-ipc",
  "crownui",
  "env_logger",

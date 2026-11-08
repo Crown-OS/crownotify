@@ -1,7 +1,7 @@
 //! The now-playing card: a remote control for the phone's media session.
 //!
 //! The card holds the transport state the phone last reported rather than
-//! deriving it, and every button sends a command back through crownconnect;
+//! deriving it, and every button sends a command back through crownlink;
 //! the card stays up after a press, because the whole point of a remote is to
 //! be pressed again.
 
