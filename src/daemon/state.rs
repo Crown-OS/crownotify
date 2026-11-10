@@ -28,7 +28,11 @@ use std::{
 use calloop::ping::Ping;
 
 use crate::{
-    ipc::{Incoming, NotificationSink, Outgoing, OutgoingSender, PhoneCommand, PhoneLink},
+    focus::sync,
+    ipc::{
+        Incoming, NotificationSink, Outgoing, OutgoingSender, PhoneCommand, PhoneLink,
+        crownlink_protocol::FocusInfo,
+    },
     launch::{ExecLauncher, Launcher},
     model::{CloseReason, Content, Notification, NotificationId},
     store::Store,
@@ -71,11 +75,11 @@ impl Daemon {
         self.launcher = launcher;
     }
 
-    pub fn new(store: Store, outgoing: OutgoingSender) -> Self {
+    pub fn new(store: Store, outgoing: OutgoingSender, phone: PhoneLink) -> Self {
         Self {
             store,
             launcher: Box::new(ExecLauncher),
-            phone: PhoneLink::new(),
+            phone,
             outgoing,
             center_open: false,
             announced_quiet: false,
@@ -185,12 +189,36 @@ impl Daemon {
     /// An unknown name is logged and ignored — the store's rule, so a typo in a
     /// keybinding is not the same request as "stop being quiet".
     pub fn set_focus_mode(&mut self, name: Option<&str>) {
-        if self.store.focus_mode() == name {
+        if same_mode(self.store.focus_mode(), name) {
             return;
         }
         match self.store.set_focus_mode(name) {
             Ok(released) => self.announce_focus(released),
             Err(error) => log::warn!("{error}"),
+        }
+    }
+
+    /// Puts the closest mode to a paired device's `focus` in force.
+    ///
+    /// The change is reported back to crownlink like a local one, which is what
+    /// lets crownlink keep the device's stamp when the mode matches and mint a
+    /// fresh one when this computer could only come close. Adopting the mode
+    /// already in force changes nothing and reports nothing, so a device
+    /// republishing what it adopted from here ends the exchange.
+    pub fn adopt_focus(&mut self, focus: &FocusInfo) {
+        let mode = sync::adopted(focus, &self.store.config().focus);
+        self.set_focus_mode(mode);
+    }
+
+    /// Adopts every device focus change the phone link has read.
+    pub fn adopt_focus_changes(&mut self) {
+        for change in self.phone.take_focus_changes() {
+            log::debug!(
+                "device {:?} changed its focus to {:?}",
+                change.id,
+                change.focus
+            );
+            self.adopt_focus(&change.focus);
         }
     }
 
@@ -202,7 +230,10 @@ impl Daemon {
     /// does not flicker it off and on.
     fn announce_focus(&mut self, released: Vec<NotificationId>) {
         let quiet = self.store.do_not_disturb();
-        let mode = self.store.focus_mode().map(str::to_string);
+        let mode = self.store.focus_mode();
+        self.phone
+            .send(PhoneCommand::SetFocus(sync::reported(mode)));
+        let mode = mode.map(str::to_string);
         self.publish(Outgoing::FocusModeChanged(mode));
         if quiet != self.announced_quiet {
             self.announced_quiet = quiet;
@@ -404,6 +435,15 @@ impl NotificationSink for DaemonState {
     }
 }
 
+/// Whether two mode names name the same mode; the store matches them
+/// ignoring case.
+fn same_mode(current: Option<&str>, requested: Option<&str>) -> bool {
+    match (current, requested) {
+        (Some(current), Some(requested)) => current.eq_ignore_ascii_case(requested),
+        (current, requested) => current == requested,
+    }
+}
+
 /// The phone command a card action asks for, if any.
 ///
 /// This is the one place `ui` and `ipc` meet: [`CardAction`] deliberately names
@@ -459,6 +499,7 @@ pub fn reply_command(content: &Content, text: &str) -> Option<PhoneCommand> {
 mod tests {
     use super::*;
     use crate::focus::FocusModes;
+    use crate::ipc::crownlink_protocol::FocusMode as DeviceFocus;
     use crate::{
         model::{Action, ActionKind, Call, Chat, Music},
         store::StoreConfig,
@@ -467,7 +508,11 @@ mod tests {
 
     fn shared() -> Daemon {
         let (outgoing, _receiver) = async_channel::unbounded();
-        Daemon::new(Store::new(StoreConfig::default()), outgoing)
+        Daemon::new(
+            Store::new(StoreConfig::default()),
+            outgoing,
+            PhoneLink::unreachable(),
+        )
     }
 
     fn state() -> DaemonState {
@@ -629,6 +674,94 @@ mod tests {
             "a typo is not a request to stop being quiet"
         );
         assert!(published(&mut state.borrow_mut()).is_empty());
+    }
+
+    fn device_focus(mode: DeviceFocus) -> FocusInfo {
+        FocusInfo {
+            mode,
+            until_unix_ms: None,
+        }
+    }
+
+    fn reported_focus(daemon: &Daemon) -> Vec<FocusInfo> {
+        daemon
+            .phone
+            .pending_commands()
+            .filter_map(|command| match command {
+                PhoneCommand::SetFocus(focus) => Some(focus.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_local_focus_change_is_reported_to_crownlink() {
+        let mut state = state();
+
+        state.set_do_not_disturb(true);
+        assert_eq!(
+            reported_focus(&state.borrow()),
+            [device_focus(DeviceFocus::DoNotDisturb)]
+        );
+
+        state.set_do_not_disturb(false);
+        assert_eq!(
+            reported_focus(&state.borrow()),
+            [device_focus(DeviceFocus::Off)],
+            "only the mode now in force is worth publishing"
+        );
+    }
+
+    #[test]
+    fn adopting_a_device_focus_reports_it_back_once_and_then_stops() {
+        let mut daemon = shared();
+        let quiet = device_focus(DeviceFocus::DoNotDisturb);
+
+        daemon.adopt_focus(&quiet);
+        assert!(daemon.store.do_not_disturb());
+        assert_eq!(reported_focus(&daemon), std::slice::from_ref(&quiet));
+        assert_eq!(drained(&mut daemon).len(), 2, "the mode and the bool");
+
+        daemon.adopt_focus(&quiet);
+        assert!(
+            drained(&mut daemon).is_empty(),
+            "the device echoing the adopted mode must not start another round"
+        );
+    }
+
+    #[test]
+    fn a_device_mode_unknown_here_is_adopted_as_do_not_disturb_and_reported_as_such() {
+        let mut daemon = shared();
+
+        daemon.adopt_focus(&device_focus(DeviceFocus::Named("sleep".to_string())));
+
+        assert_eq!(daemon.store.focus_mode(), Some(FocusModes::DO_NOT_DISTURB));
+        assert_eq!(
+            reported_focus(&daemon),
+            [device_focus(DeviceFocus::DoNotDisturb)],
+            "the device learns what this computer could really do"
+        );
+    }
+
+    #[test]
+    fn a_device_ending_its_focus_ends_the_mode_here() {
+        let mut daemon = shared();
+        daemon.set_do_not_disturb(true);
+
+        daemon.adopt_focus(&device_focus(DeviceFocus::Off));
+
+        assert!(!daemon.store.do_not_disturb());
+        assert_eq!(reported_focus(&daemon), [device_focus(DeviceFocus::Off)]);
+    }
+
+    #[test]
+    fn a_mode_named_in_another_case_is_the_mode_already_in_force() {
+        let mut daemon = shared();
+        daemon.set_do_not_disturb(true);
+        let _ = drained(&mut daemon);
+
+        daemon.set_focus_mode(Some("Do-Not-Disturb"));
+        assert!(drained(&mut daemon).is_empty());
     }
 
     #[test]

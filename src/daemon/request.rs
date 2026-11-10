@@ -53,7 +53,11 @@ mod tests {
 
     fn daemon() -> Daemon {
         let (outgoing, _receiver) = async_channel::unbounded();
-        Daemon::new(Store::new(StoreConfig::default()), outgoing)
+        Daemon::new(
+            Store::new(StoreConfig::default()),
+            outgoing,
+            crate::ipc::PhoneLink::unreachable(),
+        )
     }
 
     fn published(daemon: &mut Daemon) -> Vec<String> {

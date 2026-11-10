@@ -103,7 +103,7 @@ fn build(
     let handle = event_loop.handle();
     let (wake, wake_source) =
         calloop::ping::make_ping().context("creating the outgoing-event wake source")?;
-    let mut daemon = Daemon::new(store, outgoing.clone());
+    let mut daemon = Daemon::new(store, outgoing.clone(), ipc::PhoneLink::listening());
     daemon.set_wake(wake);
     let state = DaemonState::new(daemon);
 
@@ -158,7 +158,9 @@ fn build(
 
     handle
         .insert_source(Timer::from_duration(PHONE_PUMP), |_deadline, _, state| {
-            state.borrow_mut().phone.pump();
+            let mut daemon = state.borrow_mut();
+            daemon.phone.pump();
+            daemon.adopt_focus_changes();
             TimeoutAction::ToDuration(PHONE_PUMP)
         })
         .map_err(|error| error.error)

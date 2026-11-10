@@ -48,7 +48,11 @@ mod tests {
     #[test]
     fn a_dismissed_toast_moves_from_the_strip_to_the_center() {
         let (outgoing, _receiver) = async_channel::unbounded();
-        let mut daemon = Daemon::new(Store::new(StoreConfig::default()), outgoing);
+        let mut daemon = Daemon::new(
+            Store::new(StoreConfig::default()),
+            outgoing,
+            crate::ipc::PhoneLink::unreachable(),
+        );
         let id = daemon.post(Notification::builder("Mail").summary("Ada").build());
         assert_eq!(daemon.snapshot().toasts.len(), 1);
 
@@ -61,7 +65,11 @@ mod tests {
     #[test]
     fn the_center_and_quiet_states_travel_with_the_notifications() {
         let (outgoing, _receiver) = async_channel::unbounded();
-        let mut daemon = Daemon::new(Store::new(StoreConfig::default()), outgoing);
+        let mut daemon = Daemon::new(
+            Store::new(StoreConfig::default()),
+            outgoing,
+            crate::ipc::PhoneLink::unreachable(),
+        );
         daemon.set_center_open(Some(true));
         daemon.set_do_not_disturb(true);
 

@@ -11,6 +11,10 @@
 //! Nothing here blocks. [`PhoneLink::send`] appends and returns, and
 //! [`PhoneLink::pump`] does the connecting and the writing from the event
 //! loop's tick.
+//!
+//! A [listening](PhoneLink::listening) link also keeps the connection up with
+//! nothing to send, so the paired devices' focus changes reach the daemon as
+//! they happen; [`PhoneLink::take_focus_changes`] hands them over.
 
 use std::{
     collections::VecDeque,
@@ -20,7 +24,7 @@ use std::{
 
 use crownos_ipc::Pending;
 
-use crate::ipc::crownlink_protocol as crownlink;
+use crate::ipc::crownlink_protocol::{self as crownlink, FocusChanged, FocusInfo};
 
 /// How long to wait before retrying a connection that failed.
 ///
@@ -51,6 +55,9 @@ pub enum PhoneCommand {
         conversation_id: String,
         text: String,
     },
+    /// This computer's focus, for crownlink to publish to the devices. Only
+    /// the newest is worth sending, so a queued one is replaced, not joined.
+    SetFocus(FocusInfo),
 }
 
 /// Lazily-connected, non-blocking crownlink client. Commands issued while the
@@ -68,6 +75,10 @@ pub struct PhoneLink {
     /// Overrides the socket directory. `None` is the runtime directory, which
     /// is what everything but the tests wants.
     directory: Option<PathBuf>,
+    /// Whether to stay connected for events when there is nothing to send.
+    listen: bool,
+    /// Device focus changes read off the connection and not yet taken.
+    focus_changes: Vec<FocusChanged>,
 }
 
 impl Default for PhoneLink {
@@ -84,6 +95,17 @@ impl PhoneLink {
             outstanding: Vec::new(),
             retry_after: None,
             directory: None,
+            listen: false,
+            focus_changes: Vec::new(),
+        }
+    }
+
+    /// A link that stays connected and subscribed to the devices' focus
+    /// changes, reconnecting whenever crownlink comes back.
+    pub fn listening() -> Self {
+        Self {
+            listen: true,
+            ..Self::new()
         }
     }
 
@@ -98,6 +120,13 @@ impl PhoneLink {
         }
     }
 
+    /// A link to a directory no crownlink binds in, so tests never reach the
+    /// user's real phone.
+    #[cfg(test)]
+    pub(crate) fn unreachable() -> Self {
+        Self::in_directory(std::env::temp_dir().join("crownotify-without-crownlink"))
+    }
+
     /// Queues `command` and tries to get it out of the door immediately.
     ///
     /// Infallible on purpose. This is called from a pointer-button handler,
@@ -105,6 +134,10 @@ impl PhoneLink {
     /// user about it; the failure mode that matters is losing the command, and
     /// queueing is what prevents that.
     pub fn send(&mut self, command: PhoneCommand) {
+        if matches!(command, PhoneCommand::SetFocus(_)) {
+            self.queue
+                .retain(|queued| !matches!(queued, PhoneCommand::SetFocus(_)));
+        }
         if self.queue.len() >= MAX_QUEUED {
             let dropped = self.queue.pop_front();
             log::warn!("crownlink queue is full; dropping {dropped:?}");
@@ -117,7 +150,7 @@ impl PhoneLink {
     pub fn pump(&mut self) {
         self.harvest();
 
-        if self.client.is_none() && !self.queue.is_empty() {
+        if self.client.is_none() && (self.listen || !self.queue.is_empty()) {
             self.connect();
         }
 
@@ -158,6 +191,16 @@ impl PhoneLink {
         self.queue.len()
     }
 
+    /// Commands still waiting, oldest first.
+    pub fn pending_commands(&self) -> impl ExactSizeIterator<Item = &PhoneCommand> {
+        self.queue.iter()
+    }
+
+    /// The devices' focus changes received since the last call, oldest first.
+    pub fn take_focus_changes(&mut self) -> Vec<FocusChanged> {
+        std::mem::take(&mut self.focus_changes)
+    }
+
     fn connect(&mut self) {
         if self.retry_after.is_some_and(|at| Instant::now() < at) {
             return;
@@ -166,7 +209,7 @@ impl PhoneLink {
             Some(directory) => crownlink::Client::connect_in(directory),
             None => crownlink::Client::connect(),
         };
-        match connected {
+        match connected.and_then(|client| self.subscribe(client)) {
             Ok(client) => {
                 log::debug!(
                     "connected to crownlink; flushing {} commands",
@@ -183,6 +226,17 @@ impl PhoneLink {
                 self.retry_after = Some(Instant::now() + RECONNECT_INTERVAL);
             }
         }
+    }
+
+    /// Subscribes a fresh connection to what a listening link waits for.
+    fn subscribe(
+        &mut self,
+        mut client: crownlink::Client,
+    ) -> Result<crownlink::Client, crownos_ipc::Error> {
+        if self.listen {
+            self.outstanding.push(client.subscribe::<FocusChanged>()?);
+        }
+        Ok(client)
     }
 
     fn disconnect(&mut self) {
@@ -204,6 +258,11 @@ impl PhoneLink {
             log::debug!("crownlink connection lost while reading: {error}");
             self.disconnect();
             return;
+        }
+        while let Some(event) = client.next_event() {
+            if let crownlink::Event::FocusChanged(change) = event {
+                self.focus_changes.push(change);
+            }
         }
         let mut outstanding = std::mem::take(&mut self.outstanding);
         outstanding.retain(|pending| match client.take(pending) {
@@ -241,6 +300,7 @@ fn dispatch(
         } => client
             .send_reply(conversation_id.clone(), text.clone())
             .map(|()| None),
+        PhoneCommand::SetFocus(focus) => client.set_focus(focus.clone()).map(Some),
     }
 }
 
@@ -290,6 +350,46 @@ mod tests {
         assert!(
             link.retry_after.is_none(),
             "an empty queue has nothing to connect for"
+        );
+    }
+
+    #[test]
+    fn only_the_newest_focus_waits_for_crownlink() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut link = PhoneLink::in_directory(directory.path());
+        let focus = |mode| FocusInfo {
+            mode,
+            until_unix_ms: None,
+        };
+
+        link.send(PhoneCommand::SetFocus(focus(
+            crownlink::FocusMode::DoNotDisturb,
+        )));
+        link.send(PhoneCommand::Play);
+        link.send(PhoneCommand::SetFocus(focus(crownlink::FocusMode::Off)));
+
+        assert_eq!(
+            link.pending_commands().collect::<Vec<_>>(),
+            [
+                &PhoneCommand::Play,
+                &PhoneCommand::SetFocus(focus(crownlink::FocusMode::Off))
+            ],
+            "replaying a superseded focus would publish a mode that is no longer in force"
+        );
+    }
+
+    #[test]
+    fn a_listening_link_connects_with_nothing_to_send() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let mut link = PhoneLink {
+            listen: true,
+            ..PhoneLink::in_directory(directory.path())
+        };
+
+        link.pump();
+        assert!(
+            link.retry_after.is_some(),
+            "a listening link must try to reach crownlink for its events"
         );
     }
 

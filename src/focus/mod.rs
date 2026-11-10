@@ -8,6 +8,7 @@
 
 pub mod mode;
 pub mod policy;
+pub mod sync;
 
 pub use mode::{AppPolicy, Blocked, FocusMode, FocusModes};
 pub use policy::{FocusPolicy, Outcome};

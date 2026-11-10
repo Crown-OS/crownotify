@@ -41,42 +41,80 @@ daemon = [
 ]
 
 [dependencies]
-crownos-ipc = { git = "https://github.com/crown-os/crownos-ipc" }
+crownos-ipc = { workspace = true }
 # The phone companion's schema only; the cards call it, nothing else does.
-crownlink-linux = { git = "https://github.com/crown-os/crownlink-linux", default-features = false, optional = true }
+crownlink-linux = { workspace = true, optional = true }
 # `protocol!` generates serde structs for every method and event, so the
 # schema half needs this even with `daemon` off.
-serde = { version = "1.0", features = ["derive"] }
+serde = { workspace = true }
 
-crownui = { version = "0.1.1", default-features = false, features = ["wayland", "impeller", "static", "tokio"], optional = true }
+crownui = { workspace = true, optional = true }
 # The windows follow the daemon's snapshots through a `watch`, awaited by
 # `cx.spawn` on crownui's own tokio executor.
-tokio = { version = "1", default-features = false, features = ["sync", "time"], optional = true }
-anyhow = { version = "1.0.102", optional = true }
-thiserror = { version = "2", optional = true }
-log = { version = "0.4", optional = true }
-env_logger = { version = "0.11", optional = true }
+tokio = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+env_logger = { workspace = true, optional = true }
 
-calloop = { version = "0.13", optional = true }
+calloop = { workspace = true, optional = true }
 
-chrono = { version = "0.4.45", optional = true }
-toml = { version = "0.9", optional = true }
-smol = { version = "2.0.2", optional = true }
-async-channel = { version = "2", optional = true }
-zbus = { version = "5.16.0", optional = true }
+chrono = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+smol = { workspace = true, optional = true }
+async-channel = { workspace = true, optional = true }
+zbus = { workspace = true, optional = true }
 
-image = { version = "0.25", default-features = false, features = [
-  "png",
-  "jpeg",
-  "webp",
-  "bmp",
-], optional = true }
-usvg = { version = "0.43", optional = true }
-resvg = { version = "0.43", optional = true }
-tiny-skia = { version = "0.11", optional = true }
+image = { workspace = true, optional = true }
+usvg = { workspace = true, optional = true }
+resvg = { workspace = true, optional = true }
+tiny-skia = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+
+[workspace.dependencies]
+crownos-ipc = { git = "https://github.com/crown-os/crownos-ipc" }
+crownlink-linux = { git = "https://github.com/crown-os/crownlink-linux", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+crownui = { version = "0.1.1", default-features = false, features = ["wayland", "impeller", "static", "tokio"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+anyhow = "1.0.102"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+calloop = "0.13"
+chrono = "0.4.45"
+toml = "0.9"
+smol = "2.0.2"
+async-channel = "2"
+zbus = "5.16.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+usvg = "0.43"
+resvg = "0.43"
+tiny-skia = "0.11"
 tempfile = "3"
+
+[patch."https://github.com/crown-os/crownlink-linux"]
+crownlink-linux = { path = "../crownlink-linux" }
+
+[patch."https://github.com/crown-os/crownos-ipc"]
+crownos-ipc = { path = "../crownos-ipc" }
 
 [profile.release]
 lto = "thin"
