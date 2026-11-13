@@ -86,7 +86,7 @@ pub struct Pose {
     /// the card in front of it.
     ///
     /// An inset rather than an `Affine` scale: scaling would shrink the corner
-    /// radius and the shadow with it, and break the rectangle arithmetic the
+    /// radius with it, and break the rectangle arithmetic the
     /// input and material regions are built from.
     pub inset: f32,
     pub alpha: f32,

@@ -6,14 +6,14 @@
 //! widget, and it is what keeps the two appearances from drifting apart as the
 //! cards grow.
 //!
-//! The target is the macOS Tahoe notification: a heavily translucent, blurred,
+//! The target is a heavily translucent, blurred,
 //! rounded card floating over the wallpaper. The card fill is therefore *not*
 //! opaque — it is meant to sit on top of the compositor's backdrop blur (see
 //! [`Theme::material`]). It is opaque enough, though, to stay readable on a
 //! compositor with no background effect, where crownui falls back to an in-app
 //! blur and the fill is most of what stands between the text and the wallpaper.
 
-use crownui::prelude::{Color, Material, MaterialBlur, MaterialShadow, Styled, Vector, WHITE};
+use crownui::prelude::{Color, Material, MaterialBlur, Styled, WHITE};
 
 use crate::config::AppearancePreference;
 
@@ -84,7 +84,7 @@ impl Theme {
         }
     }
 
-    /// What the compositor is asked to render behind and around a card.
+    /// What the compositor is asked to render behind a card.
     pub fn material(&self) -> Material {
         let glass = &self.glass;
         Material {
@@ -95,11 +95,7 @@ impl Theme {
                 tint: glass.tint,
                 saturation: glass.saturation,
             }),
-            shadow: Some(MaterialShadow {
-                radius: glass.shadow_radius,
-                offset: Vector::new(0.0, glass.shadow_dy),
-                color: glass.shadow_color,
-            }),
+            shadow: None,
         }
     }
 }
@@ -110,11 +106,11 @@ impl Default for Theme {
     }
 }
 
-/// What the compositor is asked to draw behind and around a card.
+/// What the compositor is asked to draw behind a card.
 ///
 /// These are not paint: they cross the wire to `crownpositor`, which evaluates
 /// the card's rounded rectangle as a signed distance field and blurs, tints,
-/// rims and shadows it in one fragment shader pass.
+/// and rims it in one fragment shader pass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Glass {
     /// Backdrop blur radius in logical pixels.
@@ -128,9 +124,6 @@ pub struct Glass {
     pub saturation: f32,
     /// Width of the refractive rim, in logical pixels.
     pub border: f32,
-    pub shadow_radius: f32,
-    pub shadow_dy: f32,
-    pub shadow_color: Color,
 }
 
 impl Glass {
@@ -140,18 +133,12 @@ impl Glass {
             tint: Color::from_rgba8(246, 248, 250, 92),
             saturation: 1.8,
             border: 1.0,
-            shadow_radius: 18.0,
-            shadow_dy: 6.0,
-            shadow_color: Color::from_rgba8(0, 0, 0, 46),
         }
     }
 
     pub fn dark() -> Self {
         Self {
             tint: Color::from_rgba8(30, 30, 32, 110),
-            // Deeper than the light shadow for the same reason the palette's
-            // is: a dark card on a dark wallpaper has almost no edge contrast.
-            shadow_color: Color::from_rgba8(0, 0, 0, 97),
             ..Self::light()
         }
     }
@@ -167,7 +154,6 @@ pub struct Palette {
     /// Hairline rim just inside the card edge, which is what lifts the card off
     /// the blurred wallpaper when the two happen to be the same brightness.
     pub card_rim: Color,
-    pub shadow: Color,
     /// App name, summary, typed text.
     pub primary: Color,
     /// Body copy.
@@ -193,7 +179,6 @@ impl Palette {
         Self {
             card: Color::from_rgba8(246, 248, 250, 184),
             card_rim: Color::from_rgba8(255, 255, 255, 140),
-            shadow: Color::from_rgba8(0, 0, 0, 46),
             primary: Color::from_rgba8(0, 0, 0, 229),
             secondary: Color::from_rgba8(60, 60, 67, 153),
             tertiary: Color::from_rgba8(60, 60, 67, 110),
@@ -211,10 +196,6 @@ impl Palette {
         Self {
             card: Color::from_rgba8(30, 30, 32, 184),
             card_rim: Color::from_rgba8(255, 255, 255, 26),
-            // Deeper than the light shadow on purpose: a dark card over a dark
-            // wallpaper has almost no contrast at its edge, so the shadow is
-            // the only thing separating the two.
-            shadow: Color::from_rgba8(0, 0, 0, 97),
             primary: Color::from_rgba8(255, 255, 255, 240),
             secondary: Color::from_rgba8(235, 235, 245, 153),
             tertiary: Color::from_rgba8(235, 235, 245, 110),

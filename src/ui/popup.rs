@@ -28,8 +28,7 @@ use crate::{
     },
 };
 
-/// Width of the strip. Wider than a card by two margins, so the card's shadow
-/// has somewhere to fall.
+/// Width of the strip: a card and a margin either side of it.
 pub const STRIP_WIDTH: u32 = 400;
 /// The height asked for until the compositor says how tall the output is.
 const FALLBACK_HEIGHT: u32 = 900;
