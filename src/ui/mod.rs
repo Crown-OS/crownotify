@@ -1,4 +1,5 @@
-//! The presentation layer: two crownui windows over the daemon's snapshots.
+//! The presentation layer: crownui windows over the daemon's snapshots, a toast strip on each
+//! notifications output and the center on one.
 //!
 //! Nothing here reads a socket or decides policy. A window is handed
 //! [`Snapshot`](crate::daemon::Snapshot)s and draws them; what it produces from
@@ -9,6 +10,7 @@ pub mod action;
 pub mod board;
 pub mod card;
 pub mod center;
+pub mod center_output;
 pub mod deck;
 pub mod env;
 pub mod feed;
@@ -16,6 +18,7 @@ pub mod head;
 pub mod motion;
 pub mod popup;
 pub mod stack;
+pub mod surfaces;
 pub mod theme;
 pub mod tile;
 pub mod widget;
@@ -24,8 +27,10 @@ pub mod window;
 pub use action::{CardAction, MediaAction};
 pub use board::{BoardHandle, Frame, Side};
 pub use card::relative_time;
+pub use center_output::{CenterOutput, CenterSeat};
 pub use deck::{Deck, Pose};
 pub use motion::{CardMotion, Phase};
 pub use stack::{Placement, Stack, card_left, card_width};
+pub use surfaces::NotificationSurfaces;
 pub use theme::{Appearance, Metrics, Palette, Theme, Typography};
 pub use window::Window;

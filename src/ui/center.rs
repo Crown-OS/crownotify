@@ -21,6 +21,7 @@ use crate::{
     model::Notification,
     ui::{
         board::{BoardHandle, DeckHead, NOTCH, Side},
+        center_output::CenterSeat,
         env::Env,
         feed,
         head::head,
@@ -72,9 +73,11 @@ struct Panel {
     /// Open, or still sliding shut: anything of the panel on screen.
     present: Signal<bool>,
     quiet: Signal<bool>,
+    seat: Store<Option<CenterSeat>>,
 }
 
-pub fn center(window: Window) -> impl View {
+/// The center over `window`'s snapshots; `seat` ties it to the output it is built for.
+pub fn center(window: Window, seat: Option<CenterSeat>) -> impl View {
     component(move |cx| {
         let Window {
             theme,
@@ -93,13 +96,15 @@ pub fn center(window: Window) -> impl View {
             open: cx.signal(false),
             present: cx.signal(false),
             quiet: cx.signal(false),
+            seat: cx.store(seat),
         };
         let surface = cx.signal(Size::ZERO);
         let viewport = cx.signal(Size::ZERO);
         feed::follow(cx, snapshots, move |cx, snapshot| {
             panel.quiet.set(cx, snapshot.do_not_disturb);
-            if panel.open.get(cx) != snapshot.center_open {
-                panel.open.set(cx, snapshot.center_open);
+            let open = answer_open_request(cx, panel, snapshot.center_open);
+            if panel.open.get(cx) != open {
+                panel.open.set(cx, open);
                 slide(cx, panel, board);
             }
             if panel.open.get(cx) {
@@ -232,11 +237,59 @@ fn panel_view(
     .modifier(takes_input(move |runtime| panel.present.get(runtime)))
 }
 
+/// What the center does with the core's request to be open or shut.
+#[derive(Debug, PartialEq, Eq)]
+enum OpenAnswer {
+    Open,
+    Shut,
+    /// Asked to open on an output the pointer has left: stay shut and be put on the pointer's
+    /// output, where the center built anew opens.
+    MoveToFocus,
+}
+
+fn open_answer(asked_open: bool, already_open: bool, may_open_here: bool) -> OpenAnswer {
+    match (asked_open, already_open || may_open_here) {
+        (false, _) => OpenAnswer::Shut,
+        (true, true) => OpenAnswer::Open,
+        (true, false) => OpenAnswer::MoveToFocus,
+    }
+}
+
+/// Whether the panel is open after the core asked for `asked_open`. An open panel stays on its
+/// output, wherever the pointer is.
+fn answer_open_request(cx: &mut Cx, panel: Panel, asked_open: bool) -> bool {
+    let already_open = panel.open.get(cx);
+    let may_open_here = panel
+        .seat
+        .with(cx, |seat| seat.as_ref().is_none_or(CenterSeat::may_open));
+    match open_answer(asked_open, already_open, may_open_here) {
+        OpenAnswer::Open => true,
+        OpenAnswer::Shut => false,
+        OpenAnswer::MoveToFocus => {
+            panel.seat.with(cx, |seat| {
+                if let Some(seat) = seat {
+                    seat.move_to_focus();
+                }
+            });
+            false
+        }
+    }
+}
+
+fn set_present(cx: &mut Cx, panel: Panel, present: bool) {
+    panel.present.set(cx, present);
+    panel.seat.with(cx, |seat| {
+        if let Some(seat) = seat {
+            seat.set_on_screen(present);
+        }
+    });
+}
+
 /// Springs the panel toward the open state, one display refresh at a time,
 /// and puts it back the way it opens once it is fully off screen.
 fn slide(cx: &mut Cx, panel: Panel, board: BoardHandle) {
     if panel.open.get(cx) {
-        panel.present.set(cx, true);
+        set_present(cx, panel, true);
     }
     if panel
         .slide
@@ -253,10 +306,32 @@ fn slide(cx: &mut Cx, panel: Panel, board: BoardHandle) {
         });
         panel.position.set(cx, position);
         if target == 0.0 && position <= CLOSED {
-            panel.present.set(cx, false);
+            set_present(cx, panel, false);
             board.clear(cx);
         } else if !at_rest {
             slide(cx, panel, board);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OpenAnswer, open_answer};
+
+    #[test]
+    fn an_open_center_stays_open_on_its_output_when_the_pointer_leaves() {
+        assert_eq!(open_answer(true, true, false), OpenAnswer::Open);
+    }
+
+    #[test]
+    fn a_shut_center_asked_to_open_off_the_pointer_moves_instead() {
+        assert_eq!(open_answer(true, false, false), OpenAnswer::MoveToFocus);
+        assert_eq!(open_answer(true, false, true), OpenAnswer::Open);
+    }
+
+    #[test]
+    fn a_center_asked_to_shut_shuts_wherever_it_is() {
+        assert_eq!(open_answer(false, true, false), OpenAnswer::Shut);
+        assert_eq!(open_answer(false, false, true), OpenAnswer::Shut);
+    }
 }

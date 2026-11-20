@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     let notifications = samples();
     match arguments.next().as_deref() {
         Some("center") => render(
-            center::center,
+            |window| center::center(window, None),
             Snapshot {
                 history: notifications.into_iter().rev().collect(),
                 center_open: true,
