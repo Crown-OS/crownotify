@@ -12,8 +12,6 @@
 
 use std::time::Duration;
 
-use crownui::motion;
-
 use crate::{ui::theme::Metrics, util::spring::Spring};
 
 /// How many cards peek out from behind the top of a collapsed deck.

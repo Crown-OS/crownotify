@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use crownui::motion::{self, Animation, Curve};
+use motion::{Animation, Curve};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Spring {

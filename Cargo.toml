@@ -23,6 +23,7 @@ daemon = [
   "crownos-ipc/calloop",
   "dep:crownlink-linux",
   "dep:crownui",
+  "dep:motion",
   "dep:tokio",
   "dep:anyhow",
   "dep:thiserror",
@@ -49,6 +50,7 @@ crownlink-linux = { workspace = true, optional = true }
 serde = { workspace = true }
 
 crownui = { workspace = true, optional = true }
+motion = { workspace = true, optional = true }
 # The windows follow the daemon's snapshots through a `watch`, awaited by
 # `cx.spawn` on crownui's own tokio executor.
 tokio = { workspace = true, optional = true }
@@ -71,6 +73,10 @@ resvg = { workspace = true, optional = true }
 tiny-skia = { workspace = true, optional = true }
 
 [dev-dependencies]
+crowntest = { workspace = true }
+impeller = { workspace = true }
+runtime = { workspace = true }
+taffy-layout = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
@@ -92,7 +98,12 @@ dbg_macro = "deny"
 crownos-ipc = { git = "https://github.com/crown-os/crownos-ipc" }
 crownlink-linux = { git = "https://github.com/crown-os/crownlink-linux", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-crownui = { version = "0.1.1", default-features = false, features = ["wayland", "impeller", "static", "tokio"] }
+crownui = { git = "https://github.com/crown-os/crownui", default-features = false, features = ["wayland", "impeller", "static", "tokio"] }
+motion = { git = "https://github.com/crown-os/crownui" }
+crowntest = { git = "https://github.com/crown-os/crownui" }
+impeller = { git = "https://github.com/crown-os/crownui", features = ["static"] }
+runtime = { git = "https://github.com/crown-os/crownui" }
+taffy-layout = { git = "https://github.com/crown-os/crownui" }
 tokio = { version = "1", default-features = false, features = ["sync", "time"] }
 anyhow = "1.0.102"
 thiserror = "2"
@@ -112,6 +123,14 @@ tempfile = "3"
 
 [patch."https://github.com/crown-os/crownlink-linux"]
 crownlink-linux = { path = "../crownlink-linux" }
+
+[patch."https://github.com/crown-os/crownui"]
+crownui = { path = "../crownui/crownui" }
+motion = { path = "../crownui/motion" }
+crowntest = { path = "../crownui/crowntest" }
+impeller = { path = "../crownui/impeller" }
+runtime = { path = "../crownui/runtime" }
+taffy-layout = { path = "../crownui/taffy-layout" }
 
 [patch."https://github.com/crown-os/crownos-ipc"]
 crownos-ipc = { path = "../crownos-ipc" }
