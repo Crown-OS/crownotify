@@ -11,7 +11,7 @@ use crownotify::{
     profile::table::Profiles,
     ui::{CardAction, Theme, Window, center, popup},
 };
-use crownui::crowntest::{Query, Role, TestApp, role};
+use crowntest::{Query, Role, TestApp, role};
 use crownui::prelude::{KeyboardInteractivity, Rect};
 use tokio::sync::watch;
 
@@ -31,7 +31,7 @@ impl Harness {
     }
 
     fn center(snapshot: Snapshot) -> Self {
-        Self::build(snapshot, OUTPUT, center::center)
+        Self::build(snapshot, OUTPUT, |window| center::center(window, None))
     }
 
     fn build<V: crownui::prelude::View>(

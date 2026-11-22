@@ -5,9 +5,9 @@
 //!
 //! There are three threads. The core thread's calloop loop owns the
 //! [`Store`], the crownos-ipc service and the expiry timer, so a request
-//! reaches the state without a lock. crownui's event loop runs the two windows
-//! — the toast strip and the notification center — which follow the core's
-//! snapshots and send it requests. A third thread runs the session bus,
+//! reaches the state without a lock. crownui's event loop runs the windows —
+//! a toast strip on each notifications output and the notification center on
+//! one — which follow the core's snapshots and send it requests. A third thread runs the session bus,
 //! because zbus wants an async executor and the notification interface has to
 //! answer `Notify` synchronously; it reaches the core through a
 //! `calloop::channel` and is fed replies through an `async_channel`.
@@ -27,11 +27,9 @@ use crownotify::{
     config::Config,
     daemon, dbus,
     ipc::{Incoming, IncomingSender, Outgoing, OutgoingReceiver},
-    profile::table::Profiles,
     store::Store,
-    ui::{Appearance, Theme, Window, center, popup},
+    ui::{Appearance, NotificationSurfaces, Theme},
 };
-use crownui::prelude::View;
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -60,17 +58,8 @@ fn main() -> anyhow::Result<()> {
         .spawn(move || smol::block_on(session_bus(incoming_sender, ids, outgoing_receiver)))
         .context("spawning the session-bus thread")?;
 
-    let window = |config: &Config| Window {
-        theme,
-        profiles: Profiles::new(config),
-        requests: core.requests.clone(),
-        snapshots: core.snapshots.clone(),
-    };
-    crownui::run_windows(vec![
-        (popup::popup(window(&config)).boxed(), popup::config()),
-        (center::center(window(&config)).boxed(), center::config()),
-    ])
-    .context("running the crownotify windows")
+    let surfaces = NotificationSurfaces::new(theme, config, core.requests, core.snapshots);
+    crownui::run_surfaces(surfaces).context("running the crownotify windows")
 }
 
 /// Serves `org.freedesktop.Notifications` and turns the core's events into its
