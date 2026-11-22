@@ -51,6 +51,7 @@ use crate::{
         NotificationId, Progress, RelayDevice, Timeout, Urgency,
     },
     store::allocate_id,
+    util::markup::plain_text,
 };
 
 /// The well-known name a notification server owns. Exactly one process on a
@@ -134,8 +135,6 @@ impl Notifications {
             "action-icons",
             "body",
             "body-markup",
-            "body-hyperlinks",
-            "body-images",
             "icon-static",
             "persistence",
             "sound",
@@ -171,6 +170,7 @@ impl Notifications {
         mut hints: HashMap<String, Value<'_>>,
         expire_timeout: i32,
     ) -> fdo::Result<u32> {
+        let body = plain_text(&body).into_owned();
         let id = if replaces_id != 0 {
             replaces_id
         } else {

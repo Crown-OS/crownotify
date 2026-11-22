@@ -2,5 +2,6 @@
 //! must not depend on each other.
 
 pub mod lock;
+pub mod markup;
 pub mod spring;
 pub mod xdg;

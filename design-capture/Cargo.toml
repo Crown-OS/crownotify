@@ -1,0 +1,55 @@
+# Design capture for the CrownOS-Design Figma file, kept out of crownotify's own build.
+#
+# crownotify depends on the published `crownui` bundle, while the capture crate renders through
+# the local crownui crates, so their view types only line up when crownotify is built against the
+# local ones. This package is that local `crownui` (the facade's source plus the `motion` module the
+# bundle exposes), patched in for crates.io here only: crownotify's own manifest is untouched.
+#
+# Run: ../../crownui/capture/scripts/capture-app.sh . design_capture <output-dir>
+[package]
+name = "crownui"
+version = "0.1.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[features]
+default = []
+wayland = ["windowing/wayland"]
+impeller = ["dep:impeller"]
+static = ["impeller?/static"]
+tokio = ["runtime/tokio"]
+mcp = ["runtime/mcp"]
+accessibility = ["runtime/accessibility"]
+audio = ["dep:audio", "widgets/audio"]
+
+[dependencies]
+audio = { path = "../../crownui/audio", optional = true }
+geometry = { path = "../../crownui/geometry" }
+gesture = { path = "../../crownui/gesture" }
+graphics = { path = "../../crownui/graphics" }
+impeller = { path = "../../crownui/impeller", optional = true }
+input = { path = "../../crownui/input" }
+layouting = { path = "../../crownui/layouting" }
+motion = { path = "../../crownui/motion" }
+reactive = { path = "../../crownui/reactive" }
+runtime = { path = "../../crownui/runtime", default-features = false }
+semantics = { path = "../../crownui/semantics" }
+taffy-layout = { path = "../../crownui/taffy-layout" }
+thiserror = "2"
+view = { path = "../../crownui/view" }
+widgets = { path = "../../crownui/widgets" }
+windowing = { path = "../../crownui/windowing", default-features = false }
+
+[dev-dependencies]
+anyhow = "1"
+calloop = "0.13"
+capture = { path = "../../crownui/capture" }
+chrono = "0.4"
+crownotify = { path = ".." }
+crowntest = { path = "../../crownui/crowntest" }
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[patch.crates-io]
+crownui = { path = "." }

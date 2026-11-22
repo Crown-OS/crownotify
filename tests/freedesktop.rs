@@ -404,8 +404,6 @@ fn get_capabilities_advertises_inline_reply_alongside_the_spec_set() {
             "action-icons",
             "body",
             "body-markup",
-            "body-hyperlinks",
-            "body-images",
             "icon-static",
             "persistence",
             "sound",
