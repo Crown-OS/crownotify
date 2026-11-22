@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Local};
 
-/// Renders how long ago `then` was, in the macOS notification vocabulary.
+/// Renders how long ago `then` was, in the notification vocabulary.
 ///
 /// The scale is deliberately coarse and then jumps straight to a wall clock:
 /// "17m" is useful, "3h" is not — by then what the user wants to know is *when*
